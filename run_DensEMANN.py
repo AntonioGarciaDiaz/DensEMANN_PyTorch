@@ -96,10 +96,20 @@ if __name__ == '__main__':
              ' (slow but memory efficient), which is disabled by default.')
     parser.set_defaults(efficient=False)
     parser.add_argument(
+        '--training_set_size', '--training_size',
+        '--train_set_size', '--train_size',
+        dest='train_size', type=int,
+        help='Size of the training set, number of examples cut off the'
+             ' original training set for training.'
+             ' (default 45000 for C10 and C100, 6000 for SVHN).'
+             ' The max value for this is: the size of the original training'
+             ' set - the size of the validation set. If the specified'
+             ' train_size exceeds that max value, that value is used instead.')
+    parser.add_argument(
         '--validation_set_size', '--validation_size', '--valid_size',
         dest='valid_size', type=int,
         help='Size of the validation set, number of examples cut off the'
-             ' training set for validation'
+             ' original training set for validation'
              ' (default 5000 for C10 and C100, 6000 for SVHN).')
     parser.add_argument(
         '--num_epochs', '--n_epochs', '-nep',
@@ -108,10 +118,10 @@ if __name__ == '__main__':
              ' and for DensEMANN variants 0 and 1 (default 300).')
     parser.add_argument(
         '--limit_num_epochs', '--lim_n_epochs', '-lnep',
-        dest='lim_n_epochs', type=int, default=99999,
+        dest='lim_n_epochs', type=int, default=99999999,
         help='Upper limit to the number of training epochs performed when'
              ' self-constructing, used for most variants of DensEMANN'
-             ' (default 99999).')
+             ' (default 99999999).')
     parser.add_argument(
         '--batch_size', '--b_size', '-bs',
         dest='batch_size', type=int, default=64,
@@ -368,7 +378,7 @@ if __name__ == '__main__':
         '--accuracy_smooth', '-acc_smooth',
         dest='acc_smoothing', type=int, default=10,
         help='Smoothing when calculating the network\'s accuracy'
-             ' (number of epochs to look back for average accuracy).'
+             ' (number of epochs to look back for maximum accuracy).'
              ' Used for self-constructing at filter level'
              ' (to calculate a smoother pre-pruning accuracy level).')
 
@@ -431,6 +441,11 @@ if __name__ == '__main__':
             args.keep_prob = 0.8
         else:
             args.keep_prob = 1.0
+    if not args.train_size:
+        if args.dataset in ['SVHN', 'SVHN+']:
+            args.train_size = 6000
+        else:
+            args.train_size = 45000
     if not args.valid_size:
         if args.dataset in ['SVHN', 'SVHN+']:
             args.valid_size = 6000

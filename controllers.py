@@ -80,6 +80,7 @@ class DensEMANN_controller(object):
 
         efficient (bool) - whether or not to use the implementation with
             checkpointing (slow but memory efficient) (default False).
+        train_size (int) - size of training set (default 45000).
         valid_size (int) - size of validation set (default 5000).
         n_epochs (int) - number of epochs for training, when not
             self-constructing or in DensEMANN variants 0 and 1 (default 300).
@@ -232,8 +233,8 @@ class DensEMANN_controller(object):
                  data=None, save=None, growth_rate=12,
                  layer_num_list='1', keep_prob=1.0,
                  model_type='DenseNet-BC', dataset='C10+', reduction=0.5,
-                 efficient=False, valid_size=5000, n_epochs=300,
-                 lim_n_epochs=99999,
+                 efficient=False, train_size=45000, valid_size=5000,
+                 n_epochs=300, lim_n_epochs=99999,
                  batch_size=64, lr=0.1, gamma=0.1, rlr_1=0.5, rlr_2=0.75,
                  wd=0.0001, momentum=0.9, seed=None,
                  should_self_construct=True, should_change_lr=True,
@@ -256,8 +257,11 @@ class DensEMANN_controller(object):
             Exception: dataset 'DATASET' not yet supported.
                 Supported datasets: [C10, C100, SVHN].
             Exception: 'save' is not a dir.
-            Exception: source model source_experiment_id not found at dir save.
-                Please provide a valid experiment ID.
+            Exception: source model 'source_experiment_id' not found at dir
+                'save'. Please provide a valid experiment ID.
+            Exception: size 'valid_size' was specified for the validation set,
+                which is greater than the original training set size for
+                this dataset ('len(indices)').
         """
         # List of implemented DensEMANN and reduce LR variants.
         implemented_variants = [4, 5, 6, 7]
@@ -461,13 +465,26 @@ class DensEMANN_controller(object):
                 download=False)
 
         # If required, define validation set (cut off training set).
-        if valid_size:
+        if train_size or valid_size:
             indices = torch.randperm(len(self.train_set))
-            train_indices = indices[:len(indices) - valid_size]
-            valid_indices = indices[len(indices) - valid_size:]
-            self.valid_set = Subset(self.train_set, valid_indices)
-            self.train_set = Subset(self.train_set, train_indices)
-        else:
+            if valid_size:
+                # If the valid size exceeds len(indices), an error is raised.
+                if valid_size > len(indices):
+                    raise Exception(
+                        'size %d was specified for the validation set, which'
+                        ' is greater than the original training set size for'
+                        ' this dataset (%d).' % (valid_size, len(indices)))
+                valid_indices = indices[len(indices) - valid_size:]
+                self.valid_set = Subset(self.train_set, valid_indices)
+            if train_size:
+                # If the train size exceeds its max value, it goes back to it.
+                max_train_size = (
+                    len(indices) - valid_size if valid_size else len(indices))
+                if train_size > max_train_size:
+                    train_size = max_train_size
+                train_indices = indices[:train_size]
+                self.train_set = Subset(self.train_set, train_indices)
+        if not valid_size:
             self.valid_set = None
 
         # Define the model to train.

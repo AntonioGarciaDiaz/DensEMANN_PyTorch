@@ -546,7 +546,7 @@ class DensEMANNCallback(Callback):
             # micro-stage #2 = micro-pruning stage
             if self.micro_stage == 2:
                 # save the accuracy, prune useless filters and end stage
-                self.accuracy_pre_pruning = np.mean(
+                self.accuracy_pre_pruning = max(
                     list(self.accuracy_FIFO[i] for i in range(min(
                         self.acc_smoothing, len(self.accuracy_FIFO)))))
                 self.remove_filters(
@@ -717,7 +717,7 @@ class DensEMANNCallback(Callback):
             # micro-stage #2 = micro-pruning stage
             if self.micro_stage == 2:
                 # save the accuracy, prune useless filters and end stage
-                self.accuracy_pre_pruning = np.mean(
+                self.accuracy_pre_pruning = max(
                     list(self.accuracy_FIFO[i] for i in range(min(
                         self.acc_smoothing, len(self.accuracy_FIFO)))))
                 self.remove_filters(
@@ -896,7 +896,7 @@ class DensEMANNCallback(Callback):
             # micro-stage #2 = micro-pruning stage
             if self.micro_stage == 2:
                 # save the accuracy, prune useless filters and end stage
-                self.accuracy_pre_pruning = np.mean(
+                self.accuracy_pre_pruning = max(
                     list(self.accuracy_FIFO[i] for i in range(min(
                         self.acc_smoothing, len(self.accuracy_FIFO)))))
                 self.remove_filters(
@@ -1100,7 +1100,7 @@ class DensEMANNCallback(Callback):
             # micro-stage #2 = micro-pruning stage
             if self.micro_stage == 2:
                 # save the accuracy, prune useless filters and end stage
-                self.accuracy_pre_pruning = np.mean(
+                self.accuracy_pre_pruning = max(
                     list(self.accuracy_FIFO[i] for i in range(min(
                         self.acc_smoothing, len(self.accuracy_FIFO)))))
                 self.remove_filters(
