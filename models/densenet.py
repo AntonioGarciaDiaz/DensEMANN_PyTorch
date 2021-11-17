@@ -386,7 +386,6 @@ class _DenseBlock(nn.Module):
         self.efficient = efficient
 
         # Create each layer in the dense block.
-        # N.B.: At creation, only the last layer is split into filters.
         for i in range(num_layers):
             layer = _DenseLayer(
                 num_input_features + i * growth_rate,
@@ -614,7 +613,6 @@ class DenseNet(nn.Module):
             ]))
 
         # Create each individual dense block.
-        # N.B.: Only the last block's last layer is split into filters.
         self.num_features = num_init_features
         for i, num_layers in enumerate(block_config):
             block = _DenseBlock(

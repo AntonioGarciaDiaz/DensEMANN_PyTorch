@@ -21,27 +21,6 @@ from callbacks import DensEMANNCallback, ReduceLRCallback, CSVLoggerCustom
 from models import DenseNet
 
 
-class AverageMeter(object):
-    """
-    Computes and stores the average and current value.
-    Copied from:
-    https://github.com/pytorch/examples/blob/master/imagenet/main.py
-    """
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
-
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
-
 class DensEMANN_controller(object):
     """
     Controller for training and/or testing a DenseNet architecture, optionnaly
@@ -150,9 +129,10 @@ class DensEMANN_controller(object):
             at filter-level (default 300).
         complementarity (bool) - whether or not to use complementarity when
             adding new filters during filter-level self-constructing.
-        acc_smoothing (int) - memory window for network accuracies during
-            filter-level self-constructing (to smooth out the calculation of
-            the pre-pruning accuracy level) (default 10).
+        acc_lookback (int) - memory window for network accuracies during
+            filter-level self-constructing (the highest accuracy in the window
+            is used as the pre-pruning accuracy level)
+            (default 1, i.e. no look-back window).
 
         should_save_model (bool) - whether or not to save the model
             (default True).
@@ -207,7 +187,7 @@ class DensEMANN_controller(object):
             std_window, impr_thresh, preserve_transition, and optionally also
             expansion_rate, dkCS_smoothing, dkCS_std_window, dkCS_stl_thresh,
             auto_usefulness_thresh, auto_uselessness_thresh, m_asc_thresh,
-            m_patience_param, complementarity, and acc_smoothing;
+            m_patience_param, complementarity, and acc_lookback;
             all from args.
 
         should_save_model (bool) - from args.
@@ -245,7 +225,7 @@ class DensEMANN_controller(object):
                  expansion_rate=1, dkCS_smoothing=10, dkCS_std_window=30,
                  dkCS_stl_thresh=0.001, auto_usefulness_thresh=0.8,
                  auto_uselessness_thresh=0.2, m_asc_thresh=5,
-                 m_patience_param=300, complementarity=True, acc_smoothing=10,
+                 m_patience_param=300, complementarity=True, acc_lookback=1,
                  should_save_model=True, should_save_ft_logs=True,
                  ft_freq=1, ft_comma=';', ft_decimal=',', add_ft_kCS=True):
         """
@@ -357,7 +337,7 @@ class DensEMANN_controller(object):
                     "m_asc_thresh": m_asc_thresh,
                     "m_patience_param": m_patience_param,
                     "complementarity": complementarity,
-                    "acc_smoothing": acc_smoothing})
+                    "acc_lookback": acc_lookback})
         self.should_save_model = should_save_model
         self.should_save_ft_logs = should_save_ft_logs
         self.ft_freq = ft_freq
@@ -374,7 +354,7 @@ class DensEMANN_controller(object):
                      + ' Please provide a valid experiment ID.')
                     % (source_experiment_id + '_model.pth', self.save))
         # Set identifier for the experiment (depends on source model).
-        if source_experiment_id is not None and reuse_files:
+        if reuse_files and source_experiment_id is not None:
             self.experiment_id = source_experiment_id
             # Also specify in the ft-logs that the model was reloaded.
             if self.should_save_ft_logs:
@@ -416,7 +396,7 @@ class DensEMANN_controller(object):
         elif dataset_name == "SVHN":
             normalize_tfm = transforms.Normalize(mean=[0.5]*3, std=[0.5]*3)
         # elif dataset_name == "MNIST"
-        #     normalize_tfm = transforms.Normalize((*mnist_stats)
+        #     normalize_tfm = transforms.Normalize(*mnist_stats)
         else:
             # Imagenet stats should be good for most problems and datasets.
             normalize_tfm = transforms.Normalize(*imagenet_stats)
@@ -507,7 +487,6 @@ class DensEMANN_controller(object):
                 self.save, source_experiment_id + '_model.pth')))
 
         # Calculate and print the total number of parameters in the model.
-        # TODO: Make a function to count params when DensEMANN is functional.
         num_params = sum(p.numel() for p in self.model.parameters())
         print("Total parameters: ", num_params)
 

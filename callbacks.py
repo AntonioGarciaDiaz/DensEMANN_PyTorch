@@ -38,7 +38,7 @@ class DensEMANNCallback(Callback):
             std_tolerance, std_window, impr_thresh, preserve_transition,
             expansion_rate, dkCS_smoothing, dkCS_std_window, dkCS_stl_thresh,
             auto_usefulness_thresh, auto_uselessness_thresh, m_asc_thresh,
-            m_patience_param, complementarity, and acc_smoothing.
+            m_patience_param, complementarity, and acc_lookback.
 
     Attributes:
         active (bool) - whether or not DensEMANN is currently active or not
@@ -201,7 +201,7 @@ class DensEMANNCallback(Callback):
             self.accuracy_pre_pruning = 0
             self.accuracy_last_layer = 0
             self.accuracy_FIFO = deque(
-                maxlen=max(self.std_window, self.acc_smoothing))
+                maxlen=max(self.std_window, self.acc_lookback))
         else:
             self.accuracy_FIFO = deque(maxlen=self.std_window)
 
@@ -343,7 +343,7 @@ class DensEMANNCallback(Callback):
             efficient (bool) - set to True to use checkpointing
                 (default None, i.e. use the value provided at creation).
         """
-        # Run the DenseNet model's own add_new_filters method.
+        # Run the DenseNet model's own add_new_layers method.
         self.learn.model.add_new_layers(
             num_new_layers=num_new_layers, growth_rate=growth_rate,
             preserve_transition=preserve_transition, efficient=efficient)
@@ -391,7 +391,7 @@ class DensEMANNCallback(Callback):
             efficient (bool) - set to True to use checkpointing
                 (default None, i.e. use the value provided at creation).
         """
-        # Run the DenseNet model's own add_new_filters method.
+        # Run the DenseNet model's own add_new_block method.
         self.learn.model.add_new_block(
             num_layers=num_layers, growth_rate=growth_rate,
             efficient=efficient)
@@ -467,7 +467,7 @@ class DensEMANNCallback(Callback):
                 self.dkCS_FIFO[k].append(
                     (self.kCS_FIFO[k][-1] - self.kCS_FIFO[k][0])/(
                         self.dkCS_smoothing-1))
-                # Settled = kCS remained close to 0 during the last epochs
+                # Settled = dkCS remained close to 0 during the last epochs
                 if ((len(self.dkCS_FIFO[k]) == self.dkCS_std_window) and (
                         np.abs(np.mean(self.dkCS_FIFO[k])
                                ) <= self.dkCS_stl_thresh) and
@@ -546,9 +546,9 @@ class DensEMANNCallback(Callback):
             # micro-stage #2 = micro-pruning stage
             if self.micro_stage == 2:
                 # save the accuracy, prune useless filters and end stage
-                self.accuracy_pre_pruning = max(
-                    list(self.accuracy_FIFO[i] for i in range(min(
-                        self.acc_smoothing, len(self.accuracy_FIFO)))))
+                self.accuracy_pre_pruning = max([
+                    self.accuracy_FIFO[i] for i in range(min(
+                        self.acc_lookback, len(self.accuracy_FIFO)))])
                 self.remove_filters(
                     filter_ids=useless_filters_list,
                     preserve_transition=self.preserve_transition)
@@ -556,7 +556,7 @@ class DensEMANNCallback(Callback):
                 # run one last patience countdown for recovery
                 self.m_patience_cntdwn = self.m_patience_param
                 if self.should_change_lr:
-                    self.reduce_lr_callback.activation_switch()
+                    self.reduce_lr_callback.activation_switch(reset_lr=True)
                 self.set_expected_end(epoch + self.m_patience_param + 1)
 
             # micro-stage #3 = micro-recovery stage (accessed in next epoch)
@@ -651,7 +651,7 @@ class DensEMANNCallback(Callback):
                 self.dkCS_FIFO[k].append(
                     (self.kCS_FIFO[k][-1] - self.kCS_FIFO[k][0])/(
                         self.dkCS_smoothing-1))
-                # Settled = kCS remained close to 0 during the last epochs
+                # Settled = dkCS remained close to 0 during the last epochs
                 if ((len(self.dkCS_FIFO[k]) == self.dkCS_std_window) and (
                         np.abs(np.mean(self.dkCS_FIFO[k])
                                ) <= self.dkCS_stl_thresh) and
@@ -717,9 +717,9 @@ class DensEMANNCallback(Callback):
             # micro-stage #2 = micro-pruning stage
             if self.micro_stage == 2:
                 # save the accuracy, prune useless filters and end stage
-                self.accuracy_pre_pruning = max(
-                    list(self.accuracy_FIFO[i] for i in range(min(
-                        self.acc_smoothing, len(self.accuracy_FIFO)))))
+                self.accuracy_pre_pruning = max([
+                    self.accuracy_FIFO[i] for i in range(min(
+                        self.acc_lookback, len(self.accuracy_FIFO)))])
                 self.remove_filters(
                     filter_ids=useless_filters_list,
                     preserve_transition=self.preserve_transition)
@@ -727,7 +727,7 @@ class DensEMANNCallback(Callback):
                 # run one last patience countdown for recovery
                 self.m_patience_cntdwn = self.m_patience_param
                 if self.should_change_lr:
-                    self.reduce_lr_callback.activation_switch()
+                    self.reduce_lr_callback.activation_switch(reset_lr=True)
                 self.set_expected_end(epoch + self.m_patience_param + 1)
 
             # micro-stage #3 = micro-recovery stage (accessed in next epoch)
@@ -831,7 +831,7 @@ class DensEMANNCallback(Callback):
                 self.dkCS_FIFO[k].append(
                     (self.kCS_FIFO[k][-1] - self.kCS_FIFO[k][0])/(
                         self.dkCS_smoothing-1))
-                # Settled = kCS remained close to 0 during the last epochs
+                # Settled = dkCS remained close to 0 during the last epochs
                 if ((len(self.dkCS_FIFO[k]) == self.dkCS_std_window) and (
                         np.abs(np.mean(self.dkCS_FIFO[k])
                                ) <= self.dkCS_stl_thresh) and
@@ -896,9 +896,9 @@ class DensEMANNCallback(Callback):
             # micro-stage #2 = micro-pruning stage
             if self.micro_stage == 2:
                 # save the accuracy, prune useless filters and end stage
-                self.accuracy_pre_pruning = max(
-                    list(self.accuracy_FIFO[i] for i in range(min(
-                        self.acc_smoothing, len(self.accuracy_FIFO)))))
+                self.accuracy_pre_pruning = max([
+                    self.accuracy_FIFO[i] for i in range(min(
+                        self.acc_lookback, len(self.accuracy_FIFO)))])
                 self.remove_filters(
                     filter_ids=useless_filters_list,
                     preserve_transition=self.preserve_transition)
@@ -906,7 +906,7 @@ class DensEMANNCallback(Callback):
                 # run one last patience countdown for recovery
                 self.m_patience_cntdwn = self.m_patience_param
                 if self.should_change_lr:
-                    self.reduce_lr_callback.activation_switch()
+                    self.reduce_lr_callback.activation_switch(reset_lr=True)
                 self.set_expected_end(epoch + self.m_patience_param + 1)
 
             # micro-stage #3 = micro-recovery stage (accessed in next epoch)
@@ -1016,10 +1016,9 @@ class DensEMANNCallback(Callback):
                 # after std_window epochs in this stage, return to improvement
                 # stage if the accuracy didn't change much in a while.
                 if (len(self.accuracy_FIFO) >= self.std_window and
-                        np.std(self.accuracy_FIFO[i]
-                               for i in range(self.std_window)) <
+                        np.std([self.accuracy_FIFO[i] for i in range(min(
+                                self.std_window, len(self.accuracy_FIFO)))]) <
                         self.std_tolerance):
-                    self.accuracy_FIFO.clear()
                     self.set_algorithm_stage(algorithm_stage=1, micro_stage=1)
                     if self.should_change_lr:
                         self.reduce_lr_callback.activation_switch(
@@ -1046,7 +1045,7 @@ class DensEMANNCallback(Callback):
                     self.dkCS_FIFO[k].append(
                         (self.kCS_FIFO[k][-1] - self.kCS_FIFO[k][0])/(
                             self.dkCS_smoothing-1))
-                    # Settled = kCS remained close to 0 during the last epochs
+                    # Settled = dkCS remained close to 0 during the last epochs
                     if ((len(self.dkCS_FIFO[k]) == self.dkCS_std_window) and (
                             np.abs(np.mean(self.dkCS_FIFO[k])
                                    ) <= self.dkCS_stl_thresh) and
@@ -1100,9 +1099,9 @@ class DensEMANNCallback(Callback):
             # micro-stage #2 = micro-pruning stage
             if self.micro_stage == 2:
                 # save the accuracy, prune useless filters and end stage
-                self.accuracy_pre_pruning = max(
-                    list(self.accuracy_FIFO[i] for i in range(min(
-                        self.acc_smoothing, len(self.accuracy_FIFO)))))
+                self.accuracy_pre_pruning = max([
+                    self.accuracy_FIFO[i] for i in range(min(
+                        self.acc_lookback, len(self.accuracy_FIFO)))])
                 self.remove_filters(
                     filter_ids=useless_filters_list,
                     preserve_transition=self.preserve_transition)
@@ -1110,7 +1109,7 @@ class DensEMANNCallback(Callback):
                 # run one last patience countdown for recovery
                 self.m_patience_cntdwn = self.m_patience_param
                 if self.should_change_lr:
-                    self.reduce_lr_callback.activation_switch()
+                    self.reduce_lr_callback.activation_switch(reset_lr=True)
                 self.set_expected_end(epoch + self.m_patience_param + 1)
 
             # micro-stage #3 = micro-recovery stage (accessed in next epoch)
@@ -1139,24 +1138,28 @@ class DensEMANNCallback(Callback):
                 # if so, add a layer, else go to the final stage
                 if abs(accuracy-self.accuracy_last_layer) >= self.impr_thresh:
                     self.accuracy_last_layer = accuracy
-                    # if this is the first layer addition, adapt the DenseNet's
-                    # growth rate and go to the ascension stage,
-                    # else resume the current stage (improvement).
-                    if self.learn.model.block_config[-1] == 1:
-                        self.learn.model.growth_rate = len(self.kCS_FIFO)
-                        self.set_algorithm_stage(algorithm_stage=0)
-                        self.asc_ref_epoch = epoch
-                        self.set_expected_end(epoch + self.patience_param + 1)
                     self.add_new_layers(
                         preserve_transition=self.preserve_transition)
                     # alt. number of filters = half the previous
                     # layer's number if during the ascension stage.
                     #     growth_rate=floor(
                     #         len(self.filters_ref_list[-1][-1])/2))
-                    self.set_algorithm_stage(micro_stage=1)
-                    if self.should_change_lr:
-                        self.reduce_lr_callback.activation_switch(
-                            reset_lr=True)
+                    # if this is the first layer addition, adapt the DenseNet's
+                    # growth rate and go to the ascension stage,
+                    # else resume the current stage (improvement).
+                    if self.learn.model.block_config[-1] == 2:
+                        self.learn.model.growth_rate = len(self.kCS_FIFO)
+                        self.set_algorithm_stage(algorithm_stage=0)
+                        self.asc_ref_epoch = epoch
+                        self.set_expected_end(epoch + self.patience_param + 1)
+                        # Also clear the accuracy_FIFO deque,
+                        # as it plays an important role in the ascension stage.
+                        self.accuracy_FIFO.clear()
+                    else:
+                        self.set_algorithm_stage(micro_stage=1)
+                        if self.should_change_lr:
+                            self.reduce_lr_callback.activation_switch(
+                                reset_lr=True)
                 else:
                     self.set_algorithm_stage(algorithm_stage=2)
 
@@ -1408,7 +1411,7 @@ class CSVLoggerCustom(Callback):
         ft_comma (str) - from args.
         ft_decimal (str) - from args.
     """
-    order = 60
+    order = 61
 
     def __init__(self, fname='history.csv',  add_ft_kCS=True,
                  ft_comma=';', ft_decimal=','):

@@ -102,9 +102,10 @@ if __name__ == '__main__':
         help='Size of the training set, number of examples cut off the'
              ' original training set for training.'
              ' (default 45000 for C10 and C100, 6000 for SVHN).'
-             ' The max value for this is: the size of the original training'
-             ' set - the size of the validation set. If the specified'
-             ' train_size exceeds that max value, that value is used instead.')
+             ' The max value for this argument corresponds to the size of the'
+             ' original training set - the size of the validation set.'
+             ' This max value is used instead of the specified value if the'
+             ' latter exceeds the former.')
     parser.add_argument(
         '--validation_set_size', '--validation_size', '--valid_size',
         dest='valid_size', type=int,
@@ -222,7 +223,7 @@ if __name__ == '__main__':
              ' self-construction process. If, at the end of DensEMANN, the'
              ' number of blocks in the network is lower than block_count,'
              ' a new block is created (with one layer and the DenseNet\'s'
-             ' current growth rate), and DensEMANN is executed again in it.')
+             ' current growth rate), and DensEMANN is executed again on it.')
     parser.add_argument(
         '--layer_connection_strength', '--layer_cs', '-lcs', dest='layer_cs',
         type=str, choices=['relevance', 'spread'], default='relevance',
@@ -374,13 +375,14 @@ if __name__ == '__main__':
         help='Do not use a complementarity mechanism when adding new filters.')
     parser.set_defaults(complementarity=True)
     parser.add_argument(
-        '--accuracy_smoothing', '--acc_smoothing',
-        '--accuracy_smooth', '-acc_smooth',
-        dest='acc_smoothing', type=int, default=10,
-        help='Smoothing when calculating the network\'s accuracy'
-             ' (number of epochs to look back for maximum accuracy).'
-             ' Used for self-constructing at filter level'
-             ' (to calculate a smoother pre-pruning accuracy level).')
+        '--accuracy_lookback', '--acc_lookback',
+        '--accuracy_lbck', '-acc_lbck',
+        dest='acc_lookback', type=int, default=1,
+        help='Number of epochs to look back to establish the network\'s'
+             ' accuracy before pruning (it will be the maximum accuracy over'
+             ' those epochs. Used for self-constructing at filter level to'
+             ' calculate a more demanding pre-pruning accuracy level'
+             ' (default 1, i.e. no lookback).')
 
     # LOGS AND SAVES RELATED PARAMETERS ---------------------------------------
     # -------------------------------------------------------------------------
@@ -462,7 +464,7 @@ if __name__ == '__main__':
     if not args.train and not args.source_experiment_id:
         raise Exception(
             'Operation --test specified without training,'
-            ' but no source model given!\n'
+            ' but source model not specified!\n'
             'Please provide an experiment ID for the source model'
             ' (--source_experiment_id or --source_id).')
 
