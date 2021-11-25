@@ -704,9 +704,9 @@ class DenseNet(nn.Module):
         self.classifier = nn.Linear(self.num_features, self.num_classes)
 
         # Initialisation.
-        print("\nParameter name list:\n")
+        # print("\nParameter name list:\n")
         for name, param in self.named_parameters():
-            print(name)
+            # print(name)
             if 'conv' in name and 'weight' in name:
                 if bc_mode and 'conv1' in name:
                     variance_scaling_initializer_(param.data, mode='fan_in')
