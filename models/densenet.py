@@ -548,7 +548,12 @@ class _DenseBlock(nn.Module):
             # Initialise the new layer's weights.
             for name, param in layer.named_parameters():
                 if 'conv' in name and 'weight' in name:
-                    variance_scaling_initializer_(param.data)
+                    if bc_mode and 'conv1' in name:
+                        variance_scaling_initializer_(param.data,
+                                                      mode='fan_in')
+                    else:
+                        variance_scaling_initializer_(param.data,
+                                                      mode='fan_none')
                 elif 'norm' in name and 'weight' in name:
                     param.data.fill_(1)
                 elif 'norm' in name and 'bias' in name:
@@ -699,11 +704,14 @@ class DenseNet(nn.Module):
         self.classifier = nn.Linear(self.num_features, self.num_classes)
 
         # Initialisation.
-        # print("\nParameter name list:\n")
+        print("\nParameter name list:\n")
         for name, param in self.named_parameters():
-            # print(name)
+            print(name)
             if 'conv' in name and 'weight' in name:
-                variance_scaling_initializer_(param.data)
+                if bc_mode and 'conv1' in name:
+                    variance_scaling_initializer_(param.data, mode='fan_in')
+                else:
+                    variance_scaling_initializer_(param.data, mode='fan_none')
             elif 'norm' in name and 'weight' in name:
                 param.data.fill_(1)
             elif 'norm' in name and 'bias' in name:

@@ -138,7 +138,7 @@ class DensEMANN_controller(object):
             is used as the pre-pruning accuracy level)
             (default 1, i.e. no look-back window).
         m_re_patience_param (int) - alternate micro-patience parameter for the
-            micro-recovery stage (default 600).
+            micro-recovery stage (default 1000).
 
         should_save_model (bool) - whether or not to save the model
             (default True).
@@ -234,7 +234,7 @@ class DensEMANN_controller(object):
                  dkCS_stl_thresh=0.001, auto_usefulness_thresh=0.8,
                  auto_uselessness_thresh=0.2, m_asc_thresh=5,
                  m_patience_param=300, complementarity=True, acc_lookback=1,
-                 m_re_patience_param=600,
+                 m_re_patience_param=1000,
                  should_save_model=True, should_save_ft_logs=True,
                  ft_freq=1, ft_comma=';', ft_decimal=',', add_ft_kCS=True):
         """

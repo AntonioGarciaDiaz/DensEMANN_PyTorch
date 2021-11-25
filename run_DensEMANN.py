@@ -404,7 +404,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--micro_recovery_patience_parameter', '--m_recovery_patience_param',
         '--micro_re_patience_parameter', '--m_re_patience_param', '-mrpp',
-        dest='m_re_patience_param', type=int, default=600,
+        dest='m_re_patience_param', type=int, default=1000,
         help='Alternate micro-patience threshold, used for self-constructing'
              ' at filter level in DensEMANN variants 4 onwards. Number of'
              ' epochs to wait before terminating the micro-recovery stage'
