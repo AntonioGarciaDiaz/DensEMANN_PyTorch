@@ -107,6 +107,10 @@ class DensEMANN_controller(object):
             self-constructing (default 0.01).
         preserve_transition (bool) - whether or not to preserve the transition
             to classes after layer additions (default True).
+        update_growth_rate (bool) - whether or not to update the DenseNet's
+            default growth rate value before each layer or block addition,
+            using the previous layer's final number of filters as the new value
+            (default True).
 
         expansion_rate (int) - rate at which new convolutions are added
             together during the self-construction of a dense layer (default 1).
@@ -133,6 +137,8 @@ class DensEMANN_controller(object):
             filter-level self-constructing (the highest accuracy in the window
             is used as the pre-pruning accuracy level)
             (default 1, i.e. no look-back window).
+        m_re_patience_param (int) - alternate micro-patience parameter for the
+            micro-recovery stage (default 600).
 
         should_save_model (bool) - whether or not to save the model
             (default True).
@@ -184,10 +190,11 @@ class DensEMANN_controller(object):
 
         self_constr_kwargs (dict) - a keyword argument dictionary containing
             block_count, layer_cs, asc_thresh, patience_param, std_tolerance,
-            std_window, impr_thresh, preserve_transition, and optionally also
-            expansion_rate, dkCS_smoothing, dkCS_std_window, dkCS_stl_thresh,
-            auto_usefulness_thresh, auto_uselessness_thresh, m_asc_thresh,
-            m_patience_param, complementarity, and acc_lookback;
+            std_window, impr_thresh, preserve_transition, update_growth_rate,
+            and optionally also expansion_rate, dkCS_smoothing,
+            dkCS_std_window, dkCS_stl_thresh, auto_usefulness_thresh,
+            auto_uselessness_thresh, m_asc_thresh, m_patience_param,
+            complementarity, acc_lookback, and m_re_patience_param;
             all from args.
 
         should_save_model (bool) - from args.
@@ -214,7 +221,7 @@ class DensEMANN_controller(object):
                  layer_num_list='1', keep_prob=1.0,
                  model_type='DenseNet-BC', dataset='C10+', reduction=0.5,
                  efficient=False, train_size=45000, valid_size=5000,
-                 n_epochs=300, lim_n_epochs=99999,
+                 n_epochs=300, lim_n_epochs=99999999,
                  batch_size=64, lr=0.1, gamma=0.1, rlr_1=0.5, rlr_2=0.75,
                  wd=0.0001, momentum=0.9, seed=None,
                  should_self_construct=True, should_change_lr=True,
@@ -222,10 +229,12 @@ class DensEMANN_controller(object):
                  block_count=1, layer_cs='relevance', asc_thresh=10,
                  patience_param=200, std_tolerance=0.1, std_window=50,
                  impr_thresh=0.01, preserve_transition=True,
+                 update_growth_rate=True,
                  expansion_rate=1, dkCS_smoothing=10, dkCS_std_window=30,
                  dkCS_stl_thresh=0.001, auto_usefulness_thresh=0.8,
                  auto_uselessness_thresh=0.2, m_asc_thresh=5,
                  m_patience_param=300, complementarity=True, acc_lookback=1,
+                 m_re_patience_param=600,
                  should_save_model=True, should_save_ft_logs=True,
                  ft_freq=1, ft_comma=';', ft_decimal=',', add_ft_kCS=True):
         """
@@ -325,7 +334,8 @@ class DensEMANN_controller(object):
                 "asc_thresh": asc_thresh, "patience_param": patience_param,
                 "std_tolerance": std_tolerance, "std_window": std_window,
                 "impr_thresh": impr_thresh,
-                "preserve_transition": preserve_transition}
+                "preserve_transition": preserve_transition,
+                "update_growth_rate": update_growth_rate}
             if self.has_micro_algo:
                 self.self_constr_kwargs.update({
                     "expansion_rate": expansion_rate,
@@ -337,7 +347,8 @@ class DensEMANN_controller(object):
                     "m_asc_thresh": m_asc_thresh,
                     "m_patience_param": m_patience_param,
                     "complementarity": complementarity,
-                    "acc_lookback": acc_lookback})
+                    "acc_lookback": acc_lookback,
+                    "m_re_patience_param": m_re_patience_param})
         self.should_save_model = should_save_model
         self.should_save_ft_logs = should_save_ft_logs
         self.ft_freq = ft_freq
@@ -509,7 +520,7 @@ class DensEMANN_controller(object):
             valid_loader = None
         else:
             valid_loader = DataLoader(
-                self.valid_set, batch_size=self.batch_size, shuffle=False,
+                self.valid_set, batch_size=self.batch_size, shuffle=True,
                 pin_memory=(torch.cuda.is_available()), num_workers=0)
 
         # Move all model parameters and buffers to GPU (if GPU is available).
@@ -536,7 +547,7 @@ class DensEMANN_controller(object):
 
         # Create the callbacks.
         cbs = []
-        # If self constructing, create the self-constructing callback
+        # If self constructing, create the self-constructing callback.
         if self.should_self_construct:
             cbs.append(DensEMANNCallback(
                 self_constructing_var=self.self_constructing_var,
@@ -581,8 +592,6 @@ class DensEMANN_controller(object):
         # ---------------------------------------------------------------------
 
         if self.should_train:
-            # Initialize best error (useful with validation set).
-            best_accuracy = 0
             # Begin counting total training time.
             total_start_time = time.time()
             # Training loop.

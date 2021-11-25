@@ -42,6 +42,62 @@ def _bn_function_factory(norm, relu, conv):
     return bn_function
 
 
+def variance_scaling_initializer_(tensor, factor=2.0, mode='fan_none',
+                                  uniform=False):
+    """
+    Custom tensor initialiser based on the variance_scaling_initializer
+    from old TensorFlow (tf.contrib), coded in the style of PyTorch's
+    kaiming_uniform_ and kaiming_normal_. Fills the tensor with values
+    according to either a uniform or normal distribution, where the standard
+    deviation is based on the square root of a factor / the fan mode.
+    The original TensorFlow variance_scaling_initializer may be found at:
+    https://github.com/tensorflow/tensorflow/blob/
+    86abbaa083beaca05ee32675ac7bfafb58a4557d/
+    tensorflow/contrib/layers/python/layers/initializers.py
+    PyTorch initialisers kaiming_uniform_ and kaiming_normal_ can be found at:
+    https://pytorch.org/docs/stable/_modules/torch/nn/init.html
+
+    Args:
+        tensor (Tensor): an n-dimensional torch.Tensor.
+        factor (float): a slope factor for calculating the standard deviation
+            (default 2.0).
+        mode (str): either 'fan_in', 'fan_out', 'fan_avg', or 'fan_none'
+            (default). Choosing 'fan_in' preserves the magnitude of the
+            variance of the weights in the forward pass. Choosing 'fan_out'
+            preserves the magnitudes in the backwards pass. Choosing 'fan_avg'
+            corresponds to an average fan between 'fan_in' and 'fan_out'.
+            Choosing 'fan_none' does not preserve the magnitude of weights in
+            either direction (fan = 1 * filter dimensions).
+        uniform (bool): whether to use a uniform or normal distribution.
+    """
+    if 0 in tensor.shape:
+        warnings.warn("Initializing zero-element tensors is a no-op")
+        return tensor
+    if mode == 'fan_none':
+        fan = 1
+        if tensor.dim() > 2:
+            for s in tensor.shape[2:]:
+                fan *= float(s)
+    else:
+        fan_in, fan_out = nn.init._calculate_fan_in_and_fan_out(tensor)
+        if mode == 'fan_in':
+            fan = fan_in
+        elif mode == 'fan_out':
+            fan = fan_out
+        elif mode == 'fan_avg':
+            fan = (fan_in + fan_out) / 2.0
+    if uniform:
+        # Calculate bounds for uniform distribution
+        bound = math.sqrt(3.0 * factor / fan)
+        with torch.no_grad():
+            return tensor.uniform_(-bound, bound)
+    else:
+        # Calculate standard deviation for normal distribution
+        std = math.sqrt(1.3 * factor / fan)
+        with torch.no_grad():
+            return tensor.normal_(0, std)
+
+
 class _DenseLayer(nn.Module):
     """
     Dense layer class to be used inside instances of _DenseBlock.
@@ -253,13 +309,11 @@ class _DenseLayer(nn.Module):
         # The filters' number of input features depends on bc_mode.
         input_features = (self.num_bn_filters if self.bc_mode
                           else self.num_input_features)
-        # Create the new convolution, and initialize its weights.
+        # Create the new convolution, and initialise its weights.
         new_conv = nn.Conv2d(input_features,
                              self.num_filters + num_new_filters,
                              kernel_size=3, stride=1, padding=1, bias=False)
-        n = (new_conv.weight.size(0) * new_conv.weight.size(2)
-             * new_conv.weight.size(3))
-        new_conv.weight.data.normal_().mul_(math.sqrt(2. / n))
+        variance_scaling_initializer_(new_conv.weight.data)
 
         # Copy the weights from the old convolution to the new one.
         old_conv_weight = (self.conv2.weight.data.cpu() if self.bc_mode
@@ -494,8 +548,7 @@ class _DenseBlock(nn.Module):
             # Initialise the new layer's weights.
             for name, param in layer.named_parameters():
                 if 'conv' in name and 'weight' in name:
-                    n = param.size(0) * param.size(2) * param.size(3)
-                    param.data.normal_().mul_(math.sqrt(2. / n))
+                    variance_scaling_initializer_(param.data)
                 elif 'norm' in name and 'weight' in name:
                     param.data.fill_(1)
                 elif 'norm' in name and 'bias' in name:
@@ -650,8 +703,7 @@ class DenseNet(nn.Module):
         for name, param in self.named_parameters():
             # print(name)
             if 'conv' in name and 'weight' in name:
-                n = param.size(0) * param.size(2) * param.size(3)
-                param.data.normal_().mul_(math.sqrt(2. / n))
+                variance_scaling_initializer_(param.data)
             elif 'norm' in name and 'weight' in name:
                 param.data.fill_(1)
             elif 'norm' in name and 'bias' in name:
@@ -800,7 +852,8 @@ class DenseNet(nn.Module):
             preserve_transition=preserve_transition, filter_ids=filter_ids)
 
     def add_new_layers(self, num_new_layers=1, growth_rate=None,
-                       preserve_transition=True, efficient=None):
+                       preserve_transition=True, update_growth_rate=True,
+                       efficient=None):
         """
         Adds new layers to the last dense block in the DenseNet.
 
@@ -811,9 +864,19 @@ class DenseNet(nn.Module):
             preserve_transition (bool) - whether or not to preserve the
                 transition to classes (final BatchNorm2D and classifier)
                 (default True).
+            update_growth_rate (bool) - whether or not to update the DenseNet's
+                growth rate attribute before the operation, using the previous
+                layer's final number of filters as the new value
+                (default True).
             efficient (bool) - set to True to use checkpointing
                 (default None, i.e. use the value provided at creation).
         """
+        # Before any operations, update the growth rate value if required.
+        if update_growth_rate:
+            exec("self.growth_rate = self.features.denseblock{}.denselayer{}."
+                 "num_filters".format(
+                    len(self.block_config), self.block_config[-1]))
+
         # Handle None arguments.
         if growth_rate is None:
             growth_rate = self.growth_rate
@@ -821,10 +884,10 @@ class DenseNet(nn.Module):
             efficient = self.efficient
 
         # Execute the command to add the new layers (in the right dense block).
-        exec(("self.features.denseblock%d.add_new_layers("
-              + "%d, self.bc_mode, self.bn_size, self.drop_rate, "
-              + "num_new_layers=%d, efficient=efficient)") % (
-                len(self.block_config), growth_rate, num_new_layers))
+        exec("self.features.denseblock{}.add_new_layers(growth_rate, "
+             "self.bc_mode, self.bn_size, self.drop_rate, num_new_layers="
+             "num_new_layers, efficient=efficient)".format(
+                len(self.block_config)))
         # Update the block_config.
         self.block_config[-1] += num_new_layers
 
@@ -832,7 +895,8 @@ class DenseNet(nn.Module):
         self.reconstruct_transition_to_classes(
             preserve_transition=preserve_transition)
 
-    def add_new_block(self, num_layers=1, growth_rate=None, efficient=None):
+    def add_new_block(self, num_layers=1, growth_rate=None,
+                      update_growth_rate=True, efficient=None):
         """
         Add a transition layer, and a new block (with one layer) at the end
         of the current last block. The number of layers and growth rate for
@@ -842,9 +906,19 @@ class DenseNet(nn.Module):
             num_layers (int) - number of layers in the new block (default 1).
             growth_rate (int or None) - number of filters in the new layers,
                 (default None, i.e. the DenseNet's growth_rate attribute).
+            update_growth_rate (bool) - whether or not to update the DenseNet's
+                growth rate attribute before the operation, using the previous
+                layer's final number of filters as the new value
+                (default True).
             efficient (bool) - set to True to use checkpointing
                 (default None, i.e. use the value provided at creation).
         """
+        # Before any operations, update the growth rate value if required.
+        if update_growth_rate:
+            exec("self.growth_rate = self.features.denseblock{}.denselayer{}."
+                 "num_filters".format(
+                    len(self.block_config), self.block_config[-1]))
+
         # Handle None arguments.
         if growth_rate is None:
             growth_rate = self.growth_rate

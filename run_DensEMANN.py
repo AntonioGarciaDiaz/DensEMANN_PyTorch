@@ -283,6 +283,21 @@ if __name__ == '__main__':
         help='Create a new final transition layer every time a layer is added'
              ' (within the same block).')
     parser.set_defaults(preserve_transition=True)
+    parser.add_argument(
+       '--update-growth-rate-each-layer', '--update-growth-rate',
+       '--update-k-each-layer', '--update-k',
+       dest='update_growth_rate', action='store_true',
+       help='Update the DenseNet\'s default growth rate value before each'
+            ' layer or block addition. The new value will correspond to the'
+            ' number of filters in the previous layer (before the operation).')
+    parser.add_argument(
+       '--same-growth-rate-each-layer', '--same-growth-rate',
+       '--same-k-each-layer', '--same-k',
+       '--no-update-growth-rate-each-layer', '--no-update-growth-rate',
+       '--no-update-k-each-layer', '--no-update-k',
+       dest='update_growth_rate', action='store_false',
+       help='Do not update the DenseNet\'s default growth rate value.')
+    parser.set_defaults(update_growth_rate=True)
 
     # Filter-level DensEMANN parameters.
     parser.add_argument(
@@ -352,6 +367,9 @@ if __name__ == '__main__':
              ' adding a new filter during the micro-ascension stage, until a'
              ' filter settles.')
     parser.add_argument(
+        '--micro_improvement_patience_parameter',
+        '--m_improvement_patience_param',
+        '--micro_impr_patience_parameter', '--m_impr_patience_param', '-mipp',
         '--micro_patience_parameter', '--m_patience_param', '-mpp',
         dest='m_patience_param', type=int, default=300,
         help='Micro-patience threshold, used for self-constructing at filter'
@@ -383,6 +401,15 @@ if __name__ == '__main__':
              ' those epochs. Used for self-constructing at filter level to'
              ' calculate a more demanding pre-pruning accuracy level'
              ' (default 1, i.e. no lookback).')
+    parser.add_argument(
+        '--micro_recovery_patience_parameter', '--m_recovery_patience_param',
+        '--micro_re_patience_parameter', '--m_re_patience_param', '-mrpp',
+        dest='m_re_patience_param', type=int, default=600,
+        help='Alternate micro-patience threshold, used for self-constructing'
+             ' at filter level in DensEMANN variants 4 onwards. Number of'
+             ' epochs to wait before terminating the micro-recovery stage'
+             ' if pre-pruning accuracy (the usual condition for stopping this'
+             ' stage) cannot be reached.')
 
     # LOGS AND SAVES RELATED PARAMETERS ---------------------------------------
     # -------------------------------------------------------------------------
