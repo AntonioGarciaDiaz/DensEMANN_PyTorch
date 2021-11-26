@@ -605,13 +605,16 @@ class DensEMANNCallback(Callback):
                 # wait until reaching pre-pruning accuracy, then end the stage
                 if self.m_patience_cntdwn <= 0 and (
                         accuracy >= self.accuracy_pre_pruning):
+                    if self.should_change_lr:
+                        self.reduce_lr_callback.deactivation_switch()
                     if self.should_save_model:
                         self.save_model_callback._save(
                             f'{self.save_model_callback.fname}')
                     self.set_algorithm_stage(micro_stage=4)
                 # if the stage lasts too much time, end it
                 elif self.m_re_patience_cntdwn <= 0:
-                    self.reduce_lr_callback.deactivation_switch()
+                    if self.should_change_lr:
+                        self.reduce_lr_callback.deactivation_switch()
                     # undo the previous pruning-recovery if saving the model
                     if self.should_save_model:
                         print("Restoring model state before previous pruning.")
@@ -816,15 +819,18 @@ class DensEMANNCallback(Callback):
                             settled_filters_count == len(self.kCS_FIFO)):
                         self.set_algorithm_stage(micro_stage=2)
                     else:
+                        if self.should_change_lr:
+                            self.reduce_lr_callback.deactivation_switch()
                         if self.should_save_model:
                             self.save_model_callback._save(
                                 f'{self.save_model_callback.fname}')
                         self.set_algorithm_stage(micro_stage=4)
                 # if the stage lasts too much time, end it
                 elif self.m_re_patience_cntdwn <= 0:
+                    if self.should_change_lr:
+                        self.reduce_lr_callback.deactivation_switch()
                     # undo the previous pruning-recovery if saving the model
                     if self.should_save_model:
-                        self.reduce_lr_callback.deactivation_switch()
                         print("Restoring model state before previous pruning.")
                         self.add_new_filters(
                             num_new_filters=self.num_pruned_filters,
@@ -1031,15 +1037,18 @@ class DensEMANNCallback(Callback):
                             len(settled_filters_list) == len(self.kCS_FIFO)):
                         self.set_algorithm_stage(micro_stage=2)
                     else:
+                        if self.should_change_lr:
+                            self.reduce_lr_callback.deactivation_switch()
                         if self.should_save_model:
                             self.save_model_callback._save(
                                 f'{self.save_model_callback.fname}')
                         self.set_algorithm_stage(micro_stage=4)
                 # if the stage lasts too much time, end it
                 elif self.m_re_patience_cntdwn <= 0:
+                    if self.should_change_lr:
+                        self.reduce_lr_callback.deactivation_switch()
                     # undo the previous pruning-recovery if saving the model
                     if self.should_save_model:
-                        self.reduce_lr_callback.deactivation_switch()
                         print("Restoring model state before previous pruning.")
                         self.add_new_filters(
                             num_new_filters=self.num_pruned_filters,
@@ -1270,15 +1279,18 @@ class DensEMANNCallback(Callback):
                             len(settled_filters_list) == len(self.kCS_FIFO)):
                         self.set_algorithm_stage(micro_stage=2)
                     else:
+                        if self.should_change_lr:
+                            self.reduce_lr_callback.deactivation_switch()
                         if self.should_save_model:
                             self.save_model_callback._save(
                                 f'{self.save_model_callback.fname}')
                         self.set_algorithm_stage(micro_stage=4)
                 # if the stage lasts too much time, end it
                 elif self.m_re_patience_cntdwn <= 0:
+                    if self.should_change_lr:
+                        self.reduce_lr_callback.deactivation_switch()
                     # undo the previous pruning-recovery if saving the model
                     if self.should_save_model:
-                        self.reduce_lr_callback.deactivation_switch()
                         print("Restoring model state before previous pruning.")
                         self.add_new_filters(
                             num_new_filters=self.num_pruned_filters,
