@@ -64,10 +64,44 @@ if __name__ == '__main__':
         '--layer_num_list', '-lnl', dest='layer_num_list',
         type=str, default='1',
         help='The block configuration in string form: list of the (initial)'
-             ' number  of convolution layers in each block, separated by'
+             ' number of convolution layers in each block, separated by'
              ' commas (e.g. \'12,12,12\')'
              ' (default: \'1\', i.e. 1 block with 1 layer)'
              ' WARNING: in BC models, each layer is preceded by a bottleneck.')
+    parser.add_argument(
+        '--filter_num_list', '-fnl', dest='filter_num_list',
+        type=str, default=None,
+        help='The block configuration in string form, with an extra level of'
+             ' detail: list of the (initial) number of convolution filters in'
+             ' each layer, in each block. Blocks are separated by dot commas,'
+             ' while layers are separated by commas. For instance:'
+             ' \'12,12,12;13,13,13\' means 2 blocks with 3 layers each, 12'
+             ' filters in each layer for the first block, and 13 filters in'
+             ' each layer for the second block'
+             ' (unused by default, overrides layer_num_list if used).'
+             ' WARNING: in BC models, each layer is preceded by a bottleneck;'
+             ' the number of filters in it is managed by update_growth_rate.')
+    parser.add_argument(
+       '--update-growth-rate-each-layer', '--update-growth-rate',
+       '--update-k-each-layer', '--update-k',
+       dest='update_growth_rate', action='store_true',
+       help='Update the DenseNet\'s default growth rate value before each'
+            ' layer or block addition: the new value will correspond to the'
+            ' number of filters in the previous layer. For DenseNet-BC, this'
+            ' arg also means that, when the model is created, the size of each'
+            ' bottleneck layer is always 4 x the number of filters in the'
+            ' previous convolutional layer (useful if using filter_num_list).')
+    parser.add_argument(
+       '--same-growth-rate-each-layer', '--same-growth-rate',
+       '--same-k-each-layer', '--same-k',
+       '--no-update-growth-rate-each-layer', '--no-update-growth-rate',
+       '--no-update-k-each-layer', '--no-update-k',
+       dest='update_growth_rate', action='store_false',
+       help='Do not update the DenseNet\'s default growth rate value.'
+            ' For DenseNet-BC, this arg also means that, when the model is'
+            ' created, the size of each bottleneck layer is always 4 x the'
+            ' specified growth_rate value.')
+    parser.set_defaults(update_growth_rate=True)
     parser.add_argument(
         '--keep_prob', '-kp', dest='keep_prob', type=float,
         help='Keep probability for dropout, if keep_prob = 1 dropout will be'
@@ -283,21 +317,6 @@ if __name__ == '__main__':
         help='Create a new final transition layer every time a layer is added'
              ' (within the same block).')
     parser.set_defaults(preserve_transition=True)
-    parser.add_argument(
-       '--update-growth-rate-each-layer', '--update-growth-rate',
-       '--update-k-each-layer', '--update-k',
-       dest='update_growth_rate', action='store_true',
-       help='Update the DenseNet\'s default growth rate value before each'
-            ' layer or block addition. The new value will correspond to the'
-            ' number of filters in the previous layer (before the operation).')
-    parser.add_argument(
-       '--same-growth-rate-each-layer', '--same-growth-rate',
-       '--same-k-each-layer', '--same-k',
-       '--no-update-growth-rate-each-layer', '--no-update-growth-rate',
-       '--no-update-k-each-layer', '--no-update-k',
-       dest='update_growth_rate', action='store_false',
-       help='Do not update the DenseNet\'s default growth rate value.')
-    parser.set_defaults(update_growth_rate=True)
 
     # Filter-level DensEMANN parameters.
     parser.add_argument(
@@ -392,6 +411,13 @@ if __name__ == '__main__':
         dest='complementarity', action='store_false',
         help='Do not use a complementarity mechanism when adding new filters.')
     parser.set_defaults(complementarity=True)
+    parser.add_argument(
+        '--dont_prune_beyond', '-dpb',
+        dest='dont_prune_beyond', type=int, default=1,
+        help='Minimum number of filters that should remain after a pruning'
+             ' operation. If more filters have to be pruned, the algorithm'
+             ' stops building the layer (default 1, i.e. the algorithm must'
+             ' spare at least 1 filter in the layer).')
     parser.add_argument(
         '--accuracy_lookback', '--acc_lookback',
         '--accuracy_lbck', '-acc_lbck',

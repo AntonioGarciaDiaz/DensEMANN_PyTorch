@@ -48,6 +48,14 @@ class DensEMANN_controller(object):
         layer_num_list (str) - the block configuration in string form:
             the number of convolution layers in each block, separated by commas
             (default '1').
+        filter_num_list (str or None) - the block configuration with an extra
+            level of detail: the number of convolution filters in each layer
+            (separated by commas) in each block (separated by dot commas)
+            (default None, i.e. unused, overrides layer_num_list if not None).
+        update_growth_rate (bool) - whether or not to update the DenseNet's
+            default growth rate value before each layer or block addition,
+            using the previous layer's final number of filters as the new value
+            (default True).
         keep_prob (float) - keep probability for dropout, if keep_prob = 1
                 dropout will be disabled (default 1.0, i.e. disabled).
         model_type (str) - model type name ('DenseNet' or 'DenseNet-BC',
@@ -107,10 +115,6 @@ class DensEMANN_controller(object):
             self-constructing (default 0.01).
         preserve_transition (bool) - whether or not to preserve the transition
             to classes after layer additions (default True).
-        update_growth_rate (bool) - whether or not to update the DenseNet's
-            default growth rate value before each layer or block addition,
-            using the previous layer's final number of filters as the new value
-            (default True).
 
         expansion_rate (int) - rate at which new convolutions are added
             together during the self-construction of a dense layer (default 1).
@@ -133,6 +137,8 @@ class DensEMANN_controller(object):
             at filter-level (default 300).
         complementarity (bool) - whether or not to use complementarity when
             adding new filters during filter-level self-constructing.
+        dont_prune_beyond (int) - minimum number of filters that should remain
+            after a pruning operation (default 1).
         acc_lookback (int) - memory window for network accuracies during
             filter-level self-constructing (the highest accuracy in the window
             is used as the pre-pruning accuracy level)
@@ -190,12 +196,11 @@ class DensEMANN_controller(object):
 
         self_constr_kwargs (dict) - a keyword argument dictionary containing
             block_count, layer_cs, asc_thresh, patience_param, std_tolerance,
-            std_window, impr_thresh, preserve_transition, update_growth_rate,
-            and optionally also expansion_rate, dkCS_smoothing,
-            dkCS_std_window, dkCS_stl_thresh, auto_usefulness_thresh,
-            auto_uselessness_thresh, m_asc_thresh, m_patience_param,
-            complementarity, acc_lookback, and m_re_patience_param;
-            all from args.
+            std_window, impr_thresh, preserve_transition, and optionally also
+            expansion_rate, dkCS_smoothing, dkCS_std_window, dkCS_stl_thresh,
+            auto_usefulness_thresh, auto_uselessness_thresh, m_asc_thresh,
+            m_patience_param, complementarity, dont_prune_beyond, acc_lookback,
+            and m_re_patience_param; all from args.
 
         should_save_model (bool) - from args.
         should_save_ft_logs (bool) - from args.
@@ -218,7 +223,8 @@ class DensEMANN_controller(object):
     def __init__(self, train=True, test=True,
                  source_experiment_id=None, reuse_files=True,
                  data=None, save=None, growth_rate=12,
-                 layer_num_list='1', keep_prob=1.0,
+                 layer_num_list='1', filter_num_list=None,
+                 update_growth_rate=True, keep_prob=1.0,
                  model_type='DenseNet-BC', dataset='C10+', reduction=0.5,
                  efficient=False, train_size=45000, valid_size=5000,
                  n_epochs=300, lim_n_epochs=99999999,
@@ -229,12 +235,11 @@ class DensEMANN_controller(object):
                  block_count=1, layer_cs='relevance', asc_thresh=10,
                  patience_param=200, std_tolerance=0.1, std_window=50,
                  impr_thresh=0.01, preserve_transition=True,
-                 update_growth_rate=True,
                  expansion_rate=1, dkCS_smoothing=10, dkCS_std_window=30,
                  dkCS_stl_thresh=0.001, auto_usefulness_thresh=0.8,
                  auto_uselessness_thresh=0.2, m_asc_thresh=5,
-                 m_patience_param=300, complementarity=True, acc_lookback=1,
-                 m_re_patience_param=1000,
+                 m_patience_param=300, complementarity=True,
+                 dont_prune_beyond=1, acc_lookback=1, m_re_patience_param=1000,
                  should_save_model=True, should_save_ft_logs=True,
                  ft_freq=1, ft_comma=';', ft_decimal=',', add_ft_kCS=True):
         """
@@ -304,8 +309,15 @@ class DensEMANN_controller(object):
         self.should_train = train
         self.should_test = test
         self.growth_rate = growth_rate
-        # Get densenet configuration from layer_num_list.
-        self.block_config = list(map(int, layer_num_list.split(',')))
+        # Get densenet configuration from layer_num_list or filter_num_list.
+        if filter_num_list:
+            self.block_config = list(map(str, filter_num_list.split(';')))
+            for i in range(len(self.block_config)):
+                self.block_config[i] = list(
+                    map(int, self.block_config[i].split(',')))
+        else:
+            self.block_config = list(map(int, layer_num_list.split(',')))
+        self.update_growth_rate = update_growth_rate
         self.keep_prob = keep_prob
         # Get bc_mode attribute from model_type arg.
         self.bc_mode = model_type != 'DenseNet'
@@ -334,8 +346,7 @@ class DensEMANN_controller(object):
                 "asc_thresh": asc_thresh, "patience_param": patience_param,
                 "std_tolerance": std_tolerance, "std_window": std_window,
                 "impr_thresh": impr_thresh,
-                "preserve_transition": preserve_transition,
-                "update_growth_rate": update_growth_rate}
+                "preserve_transition": preserve_transition}
             if self.has_micro_algo:
                 self.self_constr_kwargs.update({
                     "expansion_rate": expansion_rate,
@@ -347,6 +358,7 @@ class DensEMANN_controller(object):
                     "m_asc_thresh": m_asc_thresh,
                     "m_patience_param": m_patience_param,
                     "complementarity": complementarity,
+                    "dont_prune_beyond": dont_prune_beyond,
                     "acc_lookback": acc_lookback,
                     "m_re_patience_param": m_re_patience_param})
         self.should_save_model = should_save_model
@@ -385,8 +397,10 @@ class DensEMANN_controller(object):
                     ("rlr%d" % self_constr_rlr) if should_change_lr
                     else "NOrlr", datetime.now().strftime("%Y_%m_%d_%H%M%S"))
             else:
-                self.experiment_id = '%s_%s_k=%d_%s_%s_%s' % (
-                    model_type, dataset, growth_rate, layer_num_list,
+                self.experiment_id = '%s_%s_prebuilt_k=%d_%s=%s_%s_%s' % (
+                    model_type, dataset, growth_rate,
+                    "fnl" if filter_num_list else "lnl",
+                    filter_num_list if filter_num_list else layer_num_list,
                     "rlr" if should_change_lr else "NOrlr",
                     datetime.now().strftime("%Y_%m_%d_%H%M%S"))
             # If using a source model, specify that in the ft-logs.
@@ -482,6 +496,7 @@ class DensEMANN_controller(object):
         self.model = DenseNet(
             growth_rate=self.growth_rate,
             block_config=self.block_config,
+            update_growth_rate=self.update_growth_rate,
             bc_mode=self.bc_mode,
             reduction=self.reduction,
             num_init_features=self.growth_rate*2,

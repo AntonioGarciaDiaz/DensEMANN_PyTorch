@@ -36,10 +36,10 @@ class DensEMANNCallback(Callback):
             DensEMANN_controller initializer, that are copied as attributes:
             block_count, layer_cs, asc_thresh, patience_param,
             std_tolerance, std_window, impr_thresh, preserve_transition,
-            update_growth_rate, expansion_rate, dkCS_smoothing,
-            dkCS_std_window, dkCS_stl_thresh, auto_usefulness_thresh,
-            auto_uselessness_thresh, m_asc_thresh, m_patience_param,
-            complementarity, acc_lookback, and m_re_patience_param.
+            expansion_rate, dkCS_smoothing, dkCS_std_window, dkCS_stl_thresh,
+            auto_usefulness_thresh, auto_uselessness_thresh, m_asc_thresh,
+            m_patience_param, complementarity, dont_prune_beyond, acc_lookback,
+            and m_re_patience_param.
 
     Attributes:
         active (bool) - whether or not DensEMANN is currently active or not
@@ -352,8 +352,7 @@ class DensEMANNCallback(Callback):
                 '\"Pruned: {}\"\n'.format(filter_ids))
 
     def add_new_layers(self, num_new_layers=1, growth_rate=None,
-                       preserve_transition=True, update_growth_rate=True,
-                       efficient=None):
+                       preserve_transition=True, efficient=None):
         """
         Adds new layers to the last dense block in the DenseNet.
 
@@ -364,18 +363,13 @@ class DensEMANNCallback(Callback):
             preserve_transition (bool) - whether or not to preserve the
                 transition to classes (final BatchNorm2D and classifier)
                 (default True).
-            update_growth_rate (bool) - whether or not to update the DenseNet's
-                growth rate attribute before the operation, using the previous
-                layer's final number of filters as the new value
-                (default True).
             efficient (bool) - set to True to use checkpointing
                 (default None, i.e. use the value provided at creation).
         """
         # Run the DenseNet model's own add_new_layers method.
         self.learn.model.add_new_layers(
             num_new_layers=num_new_layers, growth_rate=growth_rate,
-            preserve_transition=preserve_transition,
-            update_growth_rate=update_growth_rate, efficient=efficient)
+            preserve_transition=preserve_transition, efficient=efficient)
         # Execute the post-self-construction routine.
         self.post_self_construction_routine()
 
@@ -408,8 +402,7 @@ class DensEMANNCallback(Callback):
                    len(self.learn.model.block_config),
                    self.learn.model.block_config[-1]))
 
-    def add_new_block(self, num_layers=1, growth_rate=None,
-                      update_growth_rate=True, efficient=None):
+    def add_new_block(self, num_layers=1, growth_rate=None, efficient=None):
         """
         Add a new dense block in the DenseNet, with a given number of layers
         and growth rate.
@@ -418,17 +411,13 @@ class DensEMANNCallback(Callback):
             num_layers (int) - number of layers in the new block (default 1).
             growth_rate (int or None) - number of filters in the new layers,
                 (default None, i.e. the DenseNet's growth_rate attribute).
-            update_growth_rate (bool) - whether or not to update the DenseNet's
-                growth rate attribute before the operation, using the previous
-                layer's final number of filters as the new value
-                (default True).
             efficient (bool) - set to True to use checkpointing
                 (default None, i.e. use the value provided at creation).
         """
         # Run the DenseNet model's own add_new_block method.
         self.learn.model.add_new_block(
             num_layers=num_layers, growth_rate=growth_rate,
-            update_growth_rate=update_growth_rate, efficient=efficient)
+            efficient=efficient)
         # Execute the post-self-construction routine.
         self.post_self_construction_routine()
 
@@ -583,7 +572,19 @@ class DensEMANNCallback(Callback):
 
             # micro-stage #2 = micro-pruning stage
             if self.micro_stage == 2:
-                # save the accuracy, prune useless filters and end stage
+                # if no filters must be pruned, or if less than
+                # dont_prune_beyond filters would remain after the pruning
+                # operation, skip directly to the final stage
+                if len(useless_filters_list) == 0 or (
+                        len(useless_filters_list) >
+                        len(self.kCS_FIFO) - self.dont_prune_beyond):
+                    if self.should_change_lr:
+                        self.reduce_lr_callback.deactivation_switch()
+                    if self.should_save_model:
+                        self.save_model_callback._save(
+                            f'{self.save_model_callback.fname}')
+                    self.set_algorithm_stage(micro_stage=4)
+                # else, save the accuracy, prune useless filters and end stage
                 self.accuracy_pre_pruning = max([
                     self.accuracy_FIFO[-i-1] for i in range(min(
                         self.acc_lookback, len(self.accuracy_FIFO)))])
@@ -649,8 +650,7 @@ class DensEMANNCallback(Callback):
                 if abs(accuracy-self.accuracy_last_layer) >= self.impr_thresh:
                     self.accuracy_last_layer = accuracy
                     self.add_new_layers(
-                        preserve_transition=self.preserve_transition,
-                        update_growth_rate=self.update_growth_rate)
+                        preserve_transition=self.preserve_transition)
                     # alt. number of filters = half the previous
                     # layer's number if during the ascension stage.
                     #     growth_rate=floor(
@@ -791,7 +791,19 @@ class DensEMANNCallback(Callback):
 
             # micro-stage #2 = micro-pruning stage
             if self.micro_stage == 2:
-                # save the accuracy, prune useless filters and end stage
+                # if no filters must be pruned, or if less than
+                # dont_prune_beyond filters would remain after the pruning
+                # operation, skip directly to the final stage
+                if len(useless_filters_list) == 0 or (
+                        len(useless_filters_list) >
+                        len(self.kCS_FIFO) - self.dont_prune_beyond):
+                    if self.should_change_lr:
+                        self.reduce_lr_callback.deactivation_switch()
+                    if self.should_save_model:
+                        self.save_model_callback._save(
+                            f'{self.save_model_callback.fname}')
+                    self.set_algorithm_stage(micro_stage=4)
+                # else, save the accuracy, prune useless filters and end stage
                 self.accuracy_pre_pruning = max([
                     self.accuracy_FIFO[-i-1] for i in range(min(
                         self.acc_lookback, len(self.accuracy_FIFO)))])
@@ -863,8 +875,7 @@ class DensEMANNCallback(Callback):
                 if abs(accuracy-self.accuracy_last_layer) >= self.impr_thresh:
                     self.accuracy_last_layer = accuracy
                     self.add_new_layers(
-                        preserve_transition=self.preserve_transition,
-                        update_growth_rate=self.update_growth_rate)
+                        preserve_transition=self.preserve_transition)
                     # alt. number of filters = half the previous
                     # layer's number if during the ascension stage.
                     #     growth_rate=floor(
@@ -1007,7 +1018,19 @@ class DensEMANNCallback(Callback):
 
             # micro-stage #2 = micro-pruning stage
             if self.micro_stage == 2:
-                # save the accuracy, prune useless filters and end stage
+                # if no filters must be pruned, or if less than
+                # dont_prune_beyond filters would remain after the pruning
+                # operation, skip directly to the final stage
+                if len(useless_filters_list) == 0 or (
+                        len(useless_filters_list) >
+                        len(self.kCS_FIFO) - self.dont_prune_beyond):
+                    if self.should_change_lr:
+                        self.reduce_lr_callback.deactivation_switch()
+                    if self.should_save_model:
+                        self.save_model_callback._save(
+                            f'{self.save_model_callback.fname}')
+                    self.set_algorithm_stage(micro_stage=4)
+                # else, save the accuracy, prune useless filters and end stage
                 self.accuracy_pre_pruning = max([
                     self.accuracy_FIFO[-i-1] for i in range(min(
                         self.acc_lookback, len(self.accuracy_FIFO)))])
@@ -1080,8 +1103,7 @@ class DensEMANNCallback(Callback):
                 if abs(accuracy-self.accuracy_last_layer) >= self.impr_thresh:
                     self.accuracy_last_layer = accuracy
                     self.add_new_layers(
-                        preserve_transition=self.preserve_transition,
-                        update_growth_rate=self.update_growth_rate)
+                        preserve_transition=self.preserve_transition)
                     # alt. number of filters = half the previous
                     # layer's number if during the ascension stage.
                     #     growth_rate=floor(
@@ -1173,8 +1195,7 @@ class DensEMANNCallback(Callback):
                 elif (epoch-self.asc_ref_epoch) % self.asc_thresh == 0:
                     self.accuracy_last_layer = accuracy
                     self.add_new_layers(
-                        preserve_transition=self.preserve_transition,
-                        update_growth_rate=self.update_growth_rate)
+                        preserve_transition=self.preserve_transition)
 
         # stage #1 = improvement stage
         if self.algorithm_stage == 1:
@@ -1249,7 +1270,19 @@ class DensEMANNCallback(Callback):
 
             # micro-stage #2 = micro-pruning stage
             if self.micro_stage == 2:
-                # save the accuracy, prune useless filters and end stage
+                # if no filters must be pruned, or if less than
+                # dont_prune_beyond filters would remain after the pruning
+                # operation, skip directly to the final stage
+                if len(useless_filters_list) == 0 or (
+                        len(useless_filters_list) >
+                        len(self.kCS_FIFO) - self.dont_prune_beyond):
+                    if self.should_change_lr:
+                        self.reduce_lr_callback.deactivation_switch()
+                    if self.should_save_model:
+                        self.save_model_callback._save(
+                            f'{self.save_model_callback.fname}')
+                    self.set_algorithm_stage(micro_stage=4)
+                # else, save the accuracy, prune useless filters and end stage
                 self.accuracy_pre_pruning = max([
                     self.accuracy_FIFO[-i-1] for i in range(min(
                         self.acc_lookback, len(self.accuracy_FIFO)))])
@@ -1322,8 +1355,7 @@ class DensEMANNCallback(Callback):
                 if abs(accuracy-self.accuracy_last_layer) >= self.impr_thresh:
                     self.accuracy_last_layer = accuracy
                     self.add_new_layers(
-                        preserve_transition=self.preserve_transition,
-                        update_growth_rate=self.update_growth_rate)
+                        preserve_transition=self.preserve_transition)
                     # alt. number of filters = half the previous
                     # layer's number if during the ascension stage.
                     #     growth_rate=floor(
@@ -1449,8 +1481,7 @@ class DensEMANNCallback(Callback):
                 # If the block_count hasn't yet been reached, add a new block
                 # and resume DensEMANN. Else end the training process.
                 if len(self.learn.model.block_config) < self.block_count:
-                    self.add_new_block(
-                        update_growth_rate=self.update_growth_rate)
+                    self.add_new_block()
                     self.initialise_algorithm_variables(asc_ref_epoch=epoch)
                 else:
                     self.active = False

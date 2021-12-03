@@ -108,6 +108,8 @@ class _DenseLayer(nn.Module):
         bc_mode (bool) - whether or not to use the DenseNet-BC architecture.
         bn_size (int) - for DenseNet-BC, multiplicative factor for filters in
             bottleneck layers.
+        bn_growth_rate (int) - for DenseNet-BC, number of filters in bottleneck
+            layers (to be multiplied by bn_size for the actual number).
         drop_rate (float) - dropout rate after each dense layer.
         efficient (bool) - set to True to use checkpointing (default False).
 
@@ -125,13 +127,13 @@ class _DenseLayer(nn.Module):
             (corresponds to the number of 2D outputs, i.e. initialy
             growth_rate from args).
         num_bn_filters (int) - for DenseNet-BC, number of filters in the
-            bottleneck layer's convolution (i.e. bn_size * growth_rate).
+            bottleneck layer's convolution (i.e. bn_size * bn_growth_rate).
         bc_mode (bool) - from args.
         drop_rate (float) - from args.
         efficient (bool) - from args.
     """
-    def __init__(self, num_input_features, growth_rate, bn_size, bc_mode,
-                 drop_rate, efficient=False):
+    def __init__(self, num_input_features, growth_rate, bn_size,
+                 bn_growth_rate, bc_mode, drop_rate, efficient=False):
         """
         Initialiser for the _DenseLayer class.
         """
@@ -143,12 +145,13 @@ class _DenseLayer(nn.Module):
         if bc_mode:
             # DenseNet-BC architecture (contains an extra convolution).
             self.add_module(
-                'conv1', nn.Conv2d(num_input_features, bn_size * growth_rate,
-                                   kernel_size=1, stride=1, bias=False)),
-            self.add_module('norm2', nn.BatchNorm2d(bn_size * growth_rate)),
+                'conv1', nn.Conv2d(num_input_features,
+                                   bn_size * bn_growth_rate, kernel_size=1,
+                                   stride=1, bias=False)),
+            self.add_module('norm2', nn.BatchNorm2d(bn_size * bn_growth_rate)),
             self.add_module('relu2', nn.ReLU(inplace=True)),
             self.add_module(
-                'conv2', nn.Conv2d(bn_size * growth_rate, growth_rate,
+                'conv2', nn.Conv2d(bn_size * bn_growth_rate, growth_rate,
                                    kernel_size=3, stride=1, padding=1,
                                    bias=False)),
         else:
@@ -162,7 +165,7 @@ class _DenseLayer(nn.Module):
         self.num_input_features = num_input_features
         self.num_filters = growth_rate
         if bc_mode:
-            self.num_bn_filters = bn_size * growth_rate
+            self.num_bn_filters = bn_size * bn_growth_rate
         self.bc_mode = bc_mode
         self.drop_rate = drop_rate
         self.efficient = efficient
@@ -414,6 +417,11 @@ class _DenseBlock(nn.Module):
         num_layers (int) - number of layers inside the block.
         num_input_features (int) - number of input feature channels.
         growth_rate (int) - number of filters in each layer (`k` in paper).
+        layer_config (list of int or None) - optional list containing a
+            specific number of filters for each layer.
+        update_growth_rate (bool) - whether or not to change the growth_rate
+            before adding each layer, using the previous layer's final number
+            of filters as the new value.
         bc_mode (bool) - whether or not to use the DenseNet-BC architecture.
         bn_size (int) - multiplicative factor for bottleneck layers.
         drop_rate (float) - dropout rate after each dense layer.
@@ -423,11 +431,13 @@ class _DenseBlock(nn.Module):
         num_layers (int) - from args.
         num_input_features (int) - from args.
         num_output_features (int) - number of output feature channels.
-        *denselayerN (nn.Module) - Nth dense layer in the block.
+        layer_config (int) - from args (or deduced from them if None in args).
         efficient (bool) - from args, becomes default for layer additions.
+        *denselayerN (nn.Module) - Nth dense layer in the block.
     """
-    def __init__(self, num_layers, num_input_features, growth_rate, bc_mode,
-                 bn_size, drop_rate, efficient=False):
+    def __init__(self, num_layers, num_input_features, growth_rate,
+                 layer_config, update_growth_rate, bc_mode, bn_size, drop_rate,
+                 efficient=False):
         """
         Initialiser for the _DenseBlock class.
         """
@@ -435,17 +445,25 @@ class _DenseBlock(nn.Module):
         # Keep a reference to the number of layers.
         self.num_layers = num_layers
         # Keep the numbers of input and output features as a reference.
-        self.num_output_features = num_input_features + num_layers*growth_rate
+        self.num_input_features = num_input_features
+        self.num_output_features = num_input_features + (
+            num_layers*growth_rate if layer_config is None
+            else sum(layer_config))
+        # Keep the layer configuration.
+        self.layer_config = ([growth_rate for i in range(num_layers)]
+                             if layer_config is None else layer_config)
         # Keep the efficient argument (to set defaults).
         self.efficient = efficient
 
         # Create each layer in the dense block.
         for i in range(num_layers):
             layer = _DenseLayer(
-                num_input_features + i * growth_rate,
-                growth_rate=growth_rate,
+                num_input_features + sum(self.layer_config[:i]),
+                growth_rate=self.layer_config[i],
                 bc_mode=bc_mode,
                 bn_size=bn_size,
+                bn_growth_rate=(growth_rate if not update_growth_rate
+                                or i == 0 else self.layer_config[i-1]),
                 drop_rate=drop_rate,
                 efficient=efficient
             )
@@ -501,7 +519,8 @@ class _DenseBlock(nn.Module):
         exec(("self.denselayer{}.add_new_filters("
               + "num_new_filters={}, complementarity={})").format(
             self.num_layers, num_new_filters, complementarity))
-        # Update the number of output features.
+        # Update the layer_config and the number of output features.
+        self.layer_config[-1] += num_new_filters
         self.num_output_features += num_new_filters
 
     def remove_filters(self, filter_ids):
@@ -514,11 +533,12 @@ class _DenseBlock(nn.Module):
         # Reconstruct the block's last layer with the specific filters removed.
         exec(("self.denselayer{}.remove_filters(filter_ids={})").format(
                 self.num_layers, filter_ids))
-        # Update the number of output features.
+        # Update the layer_config and the number of output features.
+        self.layer_config[-1] -= len(filter_ids)
         self.num_output_features -= len(filter_ids)
 
-    def add_new_layers(self, growth_rate, bc_mode, bn_size, drop_rate,
-                       num_new_layers=1, efficient=None):
+    def add_new_layers(self, growth_rate, bc_mode, bn_size, bn_growth_rate,
+                       drop_rate, num_new_layers=1, efficient=None):
         """
         Adds new layers to the dense block.
 
@@ -526,6 +546,9 @@ class _DenseBlock(nn.Module):
             growth_rate (int) - number of filters in each layer (`k` in paper).
             bc_mode (bool) - whether or not to use DenseNet-BC.
             bn_size (int) - multiplicative factor for bottleneck layers.
+            bn_growth_rate (int) - for DenseNet-BC, number of filters in
+                bottleneck layers (to be multiplied by bn_size for the actual
+                number).
             drop_rate (float) - dropout rate after each dense layer.
             num_new_layers (int) - number of layers to add (default 1).
             efficient (bool) - set to True to use checkpointing
@@ -542,6 +565,7 @@ class _DenseBlock(nn.Module):
                 growth_rate=growth_rate,
                 bc_mode=bc_mode,
                 bn_size=bn_size,
+                bn_growth_rate=bn_growth_rate,
                 drop_rate=drop_rate,
                 efficient=efficient
             )
@@ -562,8 +586,10 @@ class _DenseBlock(nn.Module):
             self.add_module(
                 'denselayer%d' % (self.num_layers + i + 1), layer)
 
-        # Update the number of layers and output features.
+        # Update the number of layers, layer_config and output features.
         self.num_layers += num_new_layers
+        self.layer_config.extend(
+            [growth_rate for new_l in range(num_new_layers)])
         self.num_output_features += num_new_layers*growth_rate
 
 
@@ -574,8 +600,13 @@ class DenseNet(nn.Module):
 
     Args:
         growth_rate (int) - how many filters to add each layer (`k` in paper).
-        block_config (list of int) - number of layers in each pooling block
+        block_config (list of int or list of list of int) - number of layers in
+            each pooling block, and optionally number of filters in each layer
             (default [16, 16, 16]).
+        update_growth_rate (bool) - whether or not to update the DenseNet's
+            growth rate attribute before each layer/filter addition, using the
+            previous layer's final number of filters as the new value
+            (default True).
         bc_mode (bool) - whether or not to use the DenseNet-BC architecture,
             with a bottleneck after each convolution + compression at
             transition layers (default True).
@@ -606,7 +637,9 @@ class DenseNet(nn.Module):
         classifier (nn.Linear) - the fully-connected layer at the end of the
             DenseNet, for outputting class predictions.
         growth_rate (int) - from args.
-        block_config (list of int) - from args.
+        block_config (list of int) - from args, but only containing the number
+            of layers in each pooling block.
+        update_growth_rate (bool) - from args.
         bc_mode (bool) - from args.
         reduction (float) - from args.
         bn_size (int) - from args.
@@ -614,8 +647,9 @@ class DenseNet(nn.Module):
         num_classes (int) - from args.
         efficient (bool) - from args, becomes default for layer additions.
     """
-    def __init__(self, growth_rate=12, block_config=[16, 16, 16], bc_mode=True,
-                 reduction=0.5, num_init_features=24, bn_size=4, drop_rate=0,
+    def __init__(self, growth_rate=12, block_config=[16, 16, 16],
+                 update_growth_rate=True, bc_mode=True, reduction=0.5,
+                 num_init_features=24, bn_size=4, drop_rate=0,
                  num_classes=10, small_inputs=True, efficient=False,
                  seed=None):
         """
@@ -628,7 +662,11 @@ class DenseNet(nn.Module):
 
         # Copy interesting args as class attributes.
         self.growth_rate = growth_rate
-        self.block_config = block_config
+        if type(block_config[0]) == list:
+            self.block_config = [len(l) for l in block_config]
+        else:
+            self.block_config = block_config
+        self.update_growth_rate = update_growth_rate
         self.bc_mode = bc_mode
         self.reduction = reduction
         self.bn_size = bn_size
@@ -672,11 +710,14 @@ class DenseNet(nn.Module):
 
         # Create each individual dense block.
         self.num_features = num_init_features
-        for i, num_layers in enumerate(block_config):
+        for i, num_layers in enumerate(self.block_config):
             block = _DenseBlock(
                 num_layers=num_layers,
                 num_input_features=self.num_features,
-                growth_rate=growth_rate,
+                growth_rate=self.growth_rate,
+                layer_config=(block_config[i] if type(block_config[i]) == list
+                              else None),
+                update_growth_rate=update_growth_rate,
                 bc_mode=bc_mode,
                 bn_size=bn_size,
                 drop_rate=drop_rate,
@@ -685,9 +726,15 @@ class DenseNet(nn.Module):
             # Add each new dense block to the Sequential.
             self.features.add_module('denseblock%d' % (i + 1), block)
             # Update the number of output features.
-            self.num_features = self.num_features + num_layers * growth_rate
+            if type(block_config[i]) == list:
+                self.num_features += sum(block_config[i])
+                # Optionally also update the growth rate
+                if self.update_growth_rate:
+                    self.growth_rate = block_config[i][-1]
+            else:
+                self.num_features += num_layers * self.growth_rate
             # Create a transition layer for all dense blocks except the last.
-            if i != len(block_config) - 1:
+            if i != len(self.block_config) - 1:
                 trans = _Transition(num_input_features=self.num_features,
                                     num_output_features=int(
                                         self.num_features * reduction))
@@ -860,8 +907,7 @@ class DenseNet(nn.Module):
             preserve_transition=preserve_transition, filter_ids=filter_ids)
 
     def add_new_layers(self, num_new_layers=1, growth_rate=None,
-                       preserve_transition=True, update_growth_rate=True,
-                       efficient=None):
+                       preserve_transition=True, efficient=None):
         """
         Adds new layers to the last dense block in the DenseNet.
 
@@ -872,18 +918,13 @@ class DenseNet(nn.Module):
             preserve_transition (bool) - whether or not to preserve the
                 transition to classes (final BatchNorm2D and classifier)
                 (default True).
-            update_growth_rate (bool) - whether or not to update the DenseNet's
-                growth rate attribute before the operation, using the previous
-                layer's final number of filters as the new value
-                (default True).
             efficient (bool) - set to True to use checkpointing
                 (default None, i.e. use the value provided at creation).
         """
         # Before any operations, update the growth rate value if required.
-        if update_growth_rate:
-            exec("self.growth_rate = self.features.denseblock{}.denselayer{}."
-                 "num_filters".format(
-                    len(self.block_config), self.block_config[-1]))
+        if self.update_growth_rate:
+            exec("self.growth_rate = self.features.denseblock{}."
+                 "layer_config[-1]".format(len(self.block_config)))
 
         # Handle None arguments.
         if growth_rate is None:
@@ -893,8 +934,8 @@ class DenseNet(nn.Module):
 
         # Execute the command to add the new layers (in the right dense block).
         exec("self.features.denseblock{}.add_new_layers(growth_rate, "
-             "self.bc_mode, self.bn_size, self.drop_rate, num_new_layers="
-             "num_new_layers, efficient=efficient)".format(
+             "self.bc_mode, self.bn_size, self.growth_rate, self.drop_rate, "
+             "num_new_layers=num_new_layers, efficient=efficient)".format(
                 len(self.block_config)))
         # Update the block_config.
         self.block_config[-1] += num_new_layers
@@ -903,8 +944,7 @@ class DenseNet(nn.Module):
         self.reconstruct_transition_to_classes(
             preserve_transition=preserve_transition)
 
-    def add_new_block(self, num_layers=1, growth_rate=None,
-                      update_growth_rate=True, efficient=None):
+    def add_new_block(self, num_layers=1, growth_rate=None, efficient=None):
         """
         Add a transition layer, and a new block (with one layer) at the end
         of the current last block. The number of layers and growth rate for
@@ -914,18 +954,13 @@ class DenseNet(nn.Module):
             num_layers (int) - number of layers in the new block (default 1).
             growth_rate (int or None) - number of filters in the new layers,
                 (default None, i.e. the DenseNet's growth_rate attribute).
-            update_growth_rate (bool) - whether or not to update the DenseNet's
-                growth rate attribute before the operation, using the previous
-                layer's final number of filters as the new value
-                (default True).
             efficient (bool) - set to True to use checkpointing
                 (default None, i.e. use the value provided at creation).
         """
         # Before any operations, update the growth rate value if required.
-        if update_growth_rate:
-            exec("self.growth_rate = self.features.denseblock{}.denselayer{}."
-                 "num_filters".format(
-                    len(self.block_config), self.block_config[-1]))
+        if self.update_growth_rate:
+            exec("self.growth_rate = self.features.denseblock{}."
+                 "layer_config[-1]".format(len(self.block_config)))
 
         # Handle None arguments.
         if growth_rate is None:
