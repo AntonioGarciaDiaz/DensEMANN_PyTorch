@@ -317,6 +317,22 @@ if __name__ == '__main__':
         help='Create a new final transition layer every time a layer is added'
              ' (within the same block).')
     parser.set_defaults(preserve_transition=True)
+    parser.add_argument(
+        '--undo-last-layer-addition', '--undo-last-layer',
+        '--remove-last-layer-at-end', '--remove-last-layer',
+        dest='remove_last_layer', action='store_true',
+        help='After building a dense block, undo its last layer\'s addition'
+             ' (remove the last layer and reload the weight values before the'
+             ' layer was added). Implies should_save_model is set to true'
+             ' (via --saves).')
+    parser.add_argument(
+        '--keep-last-layer-at-end', '--keep-last-layer',
+        '--no-undo-last-layer-addition', '--no-undo-last-layer',
+        '--no-remove-last-layer-at-end', '--no-remove-last-layer',
+        dest='remove_last_layer', action='store_false',
+        help='After building a dense block, keep its last added layer'
+             ' (i.e. do not remove it / undo its addition).')
+    parser.set_defaults(remove_last_layer=True)
 
     # Filter-level DensEMANN parameters.
     parser.add_argument(
@@ -419,15 +435,6 @@ if __name__ == '__main__':
              ' stops building the layer (default 1, i.e. the algorithm must'
              ' spare at least 1 filter in the layer).')
     parser.add_argument(
-        '--accuracy_lookback', '--acc_lookback',
-        '--accuracy_lbck', '-acc_lbck',
-        dest='acc_lookback', type=int, default=1,
-        help='Number of epochs to look back to establish the network\'s'
-             ' accuracy before pruning (it will be the maximum accuracy over'
-             ' those epochs. Used for self-constructing at filter level to'
-             ' calculate a more demanding pre-pruning accuracy level'
-             ' (default 1, i.e. no lookback).')
-    parser.add_argument(
         '--micro_recovery_patience_parameter', '--m_recovery_patience_param',
         '--micro_re_patience_parameter', '--m_re_patience_param', '-mrpp',
         dest='m_re_patience_param', type=int, default=1000,
@@ -443,10 +450,10 @@ if __name__ == '__main__':
     # Whether or not to save the model's state (to load it back in the future).
     parser.add_argument(
         '--saves', dest='should_save_model', action='store_true',
-        help='Save the model during training.')
+        help='Save the model (and relevant hyperparameters) during training.')
     parser.add_argument(
         '--no-saves', dest='should_save_model', action='store_false',
-        help='Do not save the model during training.')
+        help='Do not save the model or its hyperparameters during training.')
     parser.set_defaults(should_save_model=True)
     # Wether or not to write CSV feature logs.
     parser.add_argument(
@@ -458,6 +465,23 @@ if __name__ == '__main__':
         dest='should_save_ft_logs', action='store_false',
         help='Do not record feature values in a CSV feature log.')
     parser.set_defaults(should_save_ft_logs=True)
+
+    # Parameters related to model saves.
+    parser.add_argument(
+        '--keep-intermediary-model-saves', '--keep-intermediary-saves',
+        '--intermediary-model-saves', '--intermediary-saves',
+        dest='keep_intermediary_model_saves', action='store_true',
+        help='Keep intermediary model saves after using DensEMANN'
+             ' (i.e. before pruning, before the last layer addition).'
+             ' Implies should_save_model is set to true (via --saves).')
+    parser.add_argument(
+        '--no-keep-intermediary-model-saves', '--no-keep-intermediary-saves',
+        '--no-intermediary-model-saves', '--no-intermediary-saves',
+        dest='keep_intermediary_model_saves', action='store_false',
+        help='Do not keep intermediary model saves after using DensEMANN.'
+             ' This means that, if should_save_model is set to true, such'
+             ' intermediary saves are deleted after running the algorithm.')
+    parser.set_defaults(keep_intermediary_model_saves=False)
 
     # Parameters related to feature logs.
     parser.add_argument(

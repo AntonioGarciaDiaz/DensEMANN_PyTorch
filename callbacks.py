@@ -10,9 +10,9 @@
 
 import numpy as np
 import os
+import pickle
 import time
 import torch
-import sys
 from collections import deque
 from datetime import timedelta
 from fastai.vision.all import *
@@ -28,17 +28,17 @@ class DensEMANNCallback(Callback):
             algorithm to be used (default is the latest variant).
         should_change_lr (bool) - whether or not the learning rate will be
             modified during training (default True).
-        should_save_model (bool) - whether or not to save the model
-            (default True).
+        should_save_model (bool) - whether or not to save the model and
+            relevant hyperparameters (default True).
         should_save_ft_logs (bool) - whether or not to save feature logs
             (default True).
         **kwargs (dict) - contains various optional arguments, all from the
             DensEMANN_controller initializer, that are copied as attributes:
             block_count, layer_cs, asc_thresh, patience_param,
             std_tolerance, std_window, impr_thresh, preserve_transition,
-            expansion_rate, dkCS_smoothing, dkCS_std_window, dkCS_stl_thresh,
-            auto_usefulness_thresh, auto_uselessness_thresh, m_asc_thresh,
-            m_patience_param, complementarity, dont_prune_beyond, acc_lookback,
+            remove_last_layer, expansion_rate, dkCS_smoothing, dkCS_std_window,
+            dkCS_stl_thresh, auto_usefulness_thresh, auto_uselessness_thresh,
+            m_asc_thresh, m_patience_param, complementarity, dont_prune_beyond,
             and m_re_patience_param.
 
     Attributes:
@@ -84,6 +84,8 @@ class DensEMANNCallback(Callback):
             to the ReduceLRCallback if it exists and is being used.
         save_model_callback (SaveModelCallback or None) - optional reference
             to the SaveModelCallback if it exists and is being used.
+        save_hypers_callback (SaveHypersCallback or None) - optional reference
+            to the SaveHypersCallback if it exists and is being used.
         csv_logger_callback (CSVLoggerCustom or None) - optional reference
             to the CSVLoggerCustom if it exists and is being used.
         init_num_filters (int) - initial number of convolution filters with
@@ -134,6 +136,7 @@ class DensEMANNCallback(Callback):
         # These arguments will be initialised just before fit
         self.reduce_lr_callback = None
         self.save_model_callback = None
+        self.save_hypers_callback = None
         self.csv_logger_callback = None
 
     def set_expected_end(self, expected_end):
@@ -217,8 +220,7 @@ class DensEMANNCallback(Callback):
             self.kCS_list_ref_cntdwn = self.m_patience_param
             self.accuracy_pre_pruning = 0
             self.accuracy_last_layer = 0
-            self.accuracy_FIFO = deque(
-                maxlen=max(self.std_window, self.acc_lookback))
+            self.accuracy_FIFO = deque(maxlen=self.std_window)
         else:
             self.accuracy_FIFO = deque(maxlen=self.std_window)
 
@@ -234,6 +236,8 @@ class DensEMANNCallback(Callback):
         if self.should_save_model:
             self.save_model_callback = next(
                 c for c in self.learn.cbs if isinstance(c, SaveModelCallback))
+            self.save_hypers_callback = next(
+                c for c in self.learn.cbs if isinstance(c, SaveHypersCallback))
         if self.should_save_ft_logs:
             self.csv_logger_callback = next(
                 c for c in self.learn.cbs if isinstance(c, CSVLoggerCustom))
@@ -263,6 +267,7 @@ class DensEMANNCallback(Callback):
         # Save the model using the SaveModelCallback.
         if self.should_save_model:
             self.save_model_callback._save(f'{self.save_model_callback.fname}')
+            self.save_hypers_callback._save_values_dict()
 
         # Display the new total number of parameters.
         num_params = sum(p.numel() for p in self.model.parameters())
@@ -366,6 +371,12 @@ class DensEMANNCallback(Callback):
             efficient (bool) - set to True to use checkpointing
                 (default None, i.e. use the value provided at creation).
         """
+        # If the last layer addition should be removed (and saving the model),
+        # save the model's pre-layer addition state separately.
+        if self.remove_last_layer and self.should_save_model:
+            self.learn.save(f'{self.save_model_callback.fname}_last_layer',
+                            with_opt=self.save_model_callback.with_opt)
+
         # Run the DenseNet model's own add_new_layers method.
         self.learn.model.add_new_layers(
             num_new_layers=num_new_layers, growth_rate=growth_rate,
@@ -400,6 +411,51 @@ class DensEMANNCallback(Callback):
                   "It now has got %d layers." %
                   (num_new_layers, growth_rate,
                    len(self.learn.model.block_config),
+                   self.learn.model.block_config[-1]))
+
+    def remove_layers(self, num_rm_layers=1, preserve_transition=True,
+                      efficient=None):
+        """
+        Removes layers at the end of the last dense block in the DenseNet.
+
+        Args:
+            num_rm_layers (int) - number of layers to remove (default 1).
+            preserve_transition (bool) - whether or not to preserve the
+                transition to classes (final BatchNorm2D and classifier)
+                (default True).
+            efficient (bool) - set to True to use checkpointing
+                (default None, i.e. use the value provided at creation).
+        """
+        # Run the DenseNet model's own remove_layers method.
+        self.learn.model.remove_layers(num_rm_layers=num_rm_layers,
+                                       preserve_transition=preserve_transition)
+        # Execute the post-self-construction routine.
+        self.post_self_construction_routine()
+
+        # Copy the new initial number of filters from the current last layer.
+        exec("self.init_num_filters = self.learn.model.features.denseblock{}."
+             "layer_config[-1]".format(len(self.learn.model.block_config)))
+
+        # If self-constructing at filter level, reset the FIFO lists.
+        if self.has_micro_algo:
+            self.kCS_FIFO = [deque(maxlen=self.dkCS_smoothing)
+                             for i in range(self.init_num_filters)]
+            self.dkCS_FIFO = [deque(maxlen=self.dkCS_std_window)
+                              for i in range(self.init_num_filters)]
+
+        # Announce the new layer's addition by printing it on console.
+        if self.learn.model.bc_mode:
+            print("REMOVED %d BOTTLENECK AND %d NEW COMPOSITE LAYERS "
+                  "at the end of the last block (#%d)! "
+                  "It now has got %d bottleneck and %d composite layers." %
+                  (num_rm_layers, num_rm_layers,
+                   len(self.learn.model.block_config),
+                   self.learn.model.block_config[-1],
+                   self.learn.model.block_config[-1]))
+        else:
+            print("REMOVED %d LAYERS (%d filters) at the end of "
+                  "the last block (#%d)! It now has got %d layers." %
+                  (num_rm_layers, len(self.learn.model.block_config),
                    self.learn.model.block_config[-1]))
 
     def add_new_block(self, num_layers=1, growth_rate=None, efficient=None):
@@ -585,21 +641,21 @@ class DensEMANNCallback(Callback):
                             f'{self.save_model_callback.fname}')
                     self.set_algorithm_stage(micro_stage=4)
                 # else, save the accuracy, prune useless filters and end stage
-                self.accuracy_pre_pruning = max([
-                    self.accuracy_FIFO[-i-1] for i in range(min(
-                        self.acc_lookback, len(self.accuracy_FIFO)))])
-                self.remove_filters(
-                    filter_ids=useless_filters_list,
-                    preserve_transition=self.preserve_transition)
-                self.set_algorithm_stage(micro_stage=3)
-                # run one last patience countdown for recovery
-                self.m_patience_cntdwn = self.m_patience_param
-                if self.should_change_lr:
-                    self.reduce_lr_callback.activation_switch(reset_lr=True)
-                # activate the countdown for keeping the kCS list as reference
-                self.kCS_list_ref_cntdwn = (
-                    self.m_patience_param - self.m_patience_cntdwn)
-                self.set_expected_end(epoch + self.m_patience_param + 1)
+                else:
+                    self.accuracy_pre_pruning = accuracy
+                    self.remove_filters(
+                        filter_ids=useless_filters_list,
+                        preserve_transition=self.preserve_transition)
+                    self.set_algorithm_stage(micro_stage=3)
+                    # run one last patience countdown for recovery
+                    self.m_patience_cntdwn = self.m_patience_param
+                    if self.should_change_lr:
+                        self.reduce_lr_callback.activation_switch(
+                            reset_lr=True)
+                    # activate the countdown to keep the kCS list as reference
+                    self.kCS_list_ref_cntdwn = (
+                        self.m_patience_param - self.m_patience_cntdwn)
+                    self.set_expected_end(epoch + self.m_patience_param + 1)
 
             # micro-stage #3 = micro-recovery stage (accessed in next epoch)
             elif self.micro_stage == 3:
@@ -629,6 +685,8 @@ class DensEMANNCallback(Callback):
                             with_opt=self.save_model_callback.with_opt)
                         self.save_model_callback._save(
                             f'{self.save_model_callback.fname}')
+                        # also make sure to use the prepruning accuracy
+                        accuracy = self.accuracy_pre_pruning
                     self.set_algorithm_stage(micro_stage=4)
                 # kCS ref and patience countdown progress
                 # (at the end the kCS values remain fixed)
@@ -658,6 +716,21 @@ class DensEMANNCallback(Callback):
                     self.set_algorithm_stage(micro_stage=0)
                     self.set_expected_end(epoch + 2*(self.m_patience_param+1))
                 else:
+                    # undo the previous layer addition if required by args
+                    # and saving the model
+                    if self.remove_last_layer and self.should_save_model:
+                        print("Restoring model state before previous layer "
+                              "addition.")
+                        self.remove_layers(
+                            preserve_transition=self.preserve_transition)
+                        print("Loading back pre-layer addition weights.")
+                        self.learn.load(
+                            f'{self.save_model_callback.fname}_last_layer',
+                            with_opt=self.save_model_callback.with_opt)
+                        self.save_model_callback._save(
+                            f'{self.save_model_callback.fname}')
+                        # also make sure to use the pre-layer addition accuracy
+                        accuracy = self.accuracy_last_layer
                     self.set_algorithm_stage(algorithm_stage=2)
 
         # stage #2 = end (stop the algorithm and reset everything)
@@ -804,21 +877,21 @@ class DensEMANNCallback(Callback):
                             f'{self.save_model_callback.fname}')
                     self.set_algorithm_stage(micro_stage=4)
                 # else, save the accuracy, prune useless filters and end stage
-                self.accuracy_pre_pruning = max([
-                    self.accuracy_FIFO[-i-1] for i in range(min(
-                        self.acc_lookback, len(self.accuracy_FIFO)))])
-                self.remove_filters(
-                    filter_ids=useless_filters_list,
-                    preserve_transition=self.preserve_transition)
-                self.set_algorithm_stage(micro_stage=3)
-                # run one last patience countdown for recovery
-                self.m_patience_cntdwn = self.m_patience_param
-                if self.should_change_lr:
-                    self.reduce_lr_callback.activation_switch(reset_lr=True)
-                # activate the countdown for keeping the kCS list as reference
-                self.kCS_list_ref_cntdwn = (
-                    self.m_patience_param - self.m_patience_cntdwn)
-                self.set_expected_end(epoch + self.m_patience_param + 1)
+                else:
+                    self.accuracy_pre_pruning = accuracy
+                    self.remove_filters(
+                        filter_ids=useless_filters_list,
+                        preserve_transition=self.preserve_transition)
+                    self.set_algorithm_stage(micro_stage=3)
+                    # run one last patience countdown for recovery
+                    self.m_patience_cntdwn = self.m_patience_param
+                    if self.should_change_lr:
+                        self.reduce_lr_callback.activation_switch(
+                            reset_lr=True)
+                    # activate the countdown to keep the kCS list as reference
+                    self.kCS_list_ref_cntdwn = (
+                        self.m_patience_param - self.m_patience_cntdwn)
+                    self.set_expected_end(epoch + self.m_patience_param + 1)
 
             # micro-stage #3 = micro-recovery stage (accessed in next epoch)
             elif self.micro_stage == 3:
@@ -854,6 +927,8 @@ class DensEMANNCallback(Callback):
                             with_opt=self.save_model_callback.with_opt)
                         self.save_model_callback._save(
                             f'{self.save_model_callback.fname}')
+                        # also make sure to use the prepruning accuracy
+                        accuracy = self.accuracy_pre_pruning
                     self.set_algorithm_stage(micro_stage=4)
                 # kCS ref and patience countdown progress
                 # (at the end the kCS values remain fixed)
@@ -886,6 +961,21 @@ class DensEMANNCallback(Callback):
                         self.reduce_lr_callback.activation_switch(
                             reset_lr=True)
                 else:
+                    # undo the previous layer addition if required by args
+                    # and saving the model
+                    if self.remove_last_layer and self.should_save_model:
+                        print("Restoring model state before previous layer "
+                              "addition.")
+                        self.remove_layers(
+                            preserve_transition=self.preserve_transition)
+                        print("Loading back pre-layer addition weights.")
+                        self.learn.load(
+                            f'{self.save_model_callback.fname}_last_layer',
+                            with_opt=self.save_model_callback.with_opt)
+                        self.save_model_callback._save(
+                            f'{self.save_model_callback.fname}')
+                        # also make sure to use the pre-layer addition accuracy
+                        accuracy = self.accuracy_last_layer
                     self.set_algorithm_stage(algorithm_stage=2)
 
         # stage #2 = end (stop the algorithm and reset everything)
@@ -1031,19 +1121,19 @@ class DensEMANNCallback(Callback):
                             f'{self.save_model_callback.fname}')
                     self.set_algorithm_stage(micro_stage=4)
                 # else, save the accuracy, prune useless filters and end stage
-                self.accuracy_pre_pruning = max([
-                    self.accuracy_FIFO[-i-1] for i in range(min(
-                        self.acc_lookback, len(self.accuracy_FIFO)))])
-                self.remove_filters(
-                    filter_ids=useless_filters_list,
-                    preserve_transition=self.preserve_transition)
-                self.set_algorithm_stage(micro_stage=3)
-                if self.should_change_lr:
-                    self.reduce_lr_callback.activation_switch(reset_lr=True)
-                # activate the countdown for keeping the kCS list as reference
-                self.kCS_list_ref_cntdwn = (
-                    self.m_patience_param - self.m_patience_cntdwn)
-                self.set_expected_end(epoch + self.m_patience_param + 1)
+                else:
+                    self.accuracy_pre_pruning = accuracy
+                    self.remove_filters(
+                        filter_ids=useless_filters_list,
+                        preserve_transition=self.preserve_transition)
+                    self.set_algorithm_stage(micro_stage=3)
+                    if self.should_change_lr:
+                        self.reduce_lr_callback.activation_switch(
+                            reset_lr=True)
+                    # activate the countdown to keep the kCS list as reference
+                    self.kCS_list_ref_cntdwn = (
+                        self.m_patience_param - self.m_patience_cntdwn)
+                    self.set_expected_end(epoch + self.m_patience_param + 1)
 
             # micro-stage #3 = micro-recovery stage (accessed in next epoch)
             elif self.micro_stage == 3:
@@ -1083,6 +1173,8 @@ class DensEMANNCallback(Callback):
                             with_opt=self.save_model_callback.with_opt)
                         self.save_model_callback._save(
                             f'{self.save_model_callback.fname}')
+                        # also make sure to use the prepruning accuracy
+                        accuracy = self.accuracy_pre_pruning
                     self.set_algorithm_stage(micro_stage=4)
                 # kCS ref and patience countdown progress
                 # (at the end the kCS values remain fixed)
@@ -1114,6 +1206,21 @@ class DensEMANNCallback(Callback):
                         self.reduce_lr_callback.activation_switch(
                             reset_lr=True)
                 else:
+                    # undo the previous layer addition if required by args
+                    # and saving the model
+                    if self.remove_last_layer and self.should_save_model:
+                        print("Restoring model state before previous layer "
+                              "addition.")
+                        self.remove_layers(
+                            preserve_transition=self.preserve_transition)
+                        print("Loading back pre-layer addition weights.")
+                        self.learn.load(
+                            f'{self.save_model_callback.fname}_last_layer',
+                            with_opt=self.save_model_callback.with_opt)
+                        self.save_model_callback._save(
+                            f'{self.save_model_callback.fname}')
+                        # also make sure to use the pre-layer addition accuracy
+                        accuracy = self.accuracy_last_layer
                     self.set_algorithm_stage(algorithm_stage=2)
 
         # stage #2 = end (stop the algorithm and reset everything)
@@ -1283,19 +1390,19 @@ class DensEMANNCallback(Callback):
                             f'{self.save_model_callback.fname}')
                     self.set_algorithm_stage(micro_stage=4)
                 # else, save the accuracy, prune useless filters and end stage
-                self.accuracy_pre_pruning = max([
-                    self.accuracy_FIFO[-i-1] for i in range(min(
-                        self.acc_lookback, len(self.accuracy_FIFO)))])
-                self.remove_filters(
-                    filter_ids=useless_filters_list,
-                    preserve_transition=self.preserve_transition)
-                self.set_algorithm_stage(micro_stage=3)
-                if self.should_change_lr:
-                    self.reduce_lr_callback.activation_switch(reset_lr=True)
-                # activate the countdown for keeping the kCS list as reference
-                self.kCS_list_ref_cntdwn = (
-                    self.m_patience_param - self.m_patience_cntdwn)
-                self.set_expected_end(epoch + self.m_patience_param + 1)
+                else:
+                    self.accuracy_pre_pruning = accuracy
+                    self.remove_filters(
+                        filter_ids=useless_filters_list,
+                        preserve_transition=self.preserve_transition)
+                    self.set_algorithm_stage(micro_stage=3)
+                    if self.should_change_lr:
+                        self.reduce_lr_callback.activation_switch(
+                            reset_lr=True)
+                    # activate the countdown to keep the kCS list as reference
+                    self.kCS_list_ref_cntdwn = (
+                        self.m_patience_param - self.m_patience_cntdwn)
+                    self.set_expected_end(epoch + self.m_patience_param + 1)
 
             # micro-stage #3 = micro-recovery stage (accessed in next epoch)
             elif self.micro_stage == 3:
@@ -1335,6 +1442,8 @@ class DensEMANNCallback(Callback):
                             with_opt=self.save_model_callback.with_opt)
                         self.save_model_callback._save(
                             f'{self.save_model_callback.fname}')
+                        # also make sure to use the prepruning accuracy
+                        accuracy = self.accuracy_pre_pruning
                     self.set_algorithm_stage(micro_stage=4)
                 # kCS ref and patience countdown progress
                 # (at the end the kCS values remain fixed)
@@ -1378,6 +1487,21 @@ class DensEMANNCallback(Callback):
                             self.reduce_lr_callback.activation_switch(
                                 reset_lr=True)
                 else:
+                    # undo the previous layer addition if required by args
+                    # and saving the model
+                    if self.remove_last_layer and self.should_save_model:
+                        print("Restoring model state before previous layer "
+                              "addition.")
+                        self.remove_layers(
+                            preserve_transition=self.preserve_transition)
+                        print("Loading back pre-layer addition weights.")
+                        self.learn.load(
+                            f'{self.save_model_callback.fname}_last_layer',
+                            with_opt=self.save_model_callback.with_opt)
+                        self.save_model_callback._save(
+                            f'{self.save_model_callback.fname}')
+                        # also make sure to use the pre-layer addition accuracy
+                        accuracy = self.accuracy_last_layer
                     self.set_algorithm_stage(algorithm_stage=2)
 
         # stage #2 = end (stop the algorithm and reset everything)
@@ -1699,3 +1823,54 @@ class CSVLoggerCustom(Callback):
             return
         self.file.close()
         self.learn.logger = self.old_logger
+
+
+class SaveHypersCallback(Callback):
+    """
+    Saves certain hyperparameters to a given pickle file.
+
+    Args:
+        fname (str) - the name of the file where hyperparameters are saved
+            (default 'hypers.pkl').
+
+    Attributes:
+        fname (str) - from args.
+        values_dict (dict) - dictionnary containing values for some of the
+            DenseNet model's hyperparameters, namely growth_rate, block_config
+            (including each layer_config), update_growth_rate and bc_mode.
+    """
+    order = 80
+
+    def __init__(self, fname='hypers.pkl'):
+        """
+        Initializer for the SaveHypersCallback.
+        """
+        self.fname = fname
+
+    def before_fit(self):
+        """
+        Initialise the values_dict and save it to the file.
+        """
+        self.values_dict = {
+            "growth_rate": self.model.growth_rate,
+            "block_config": [
+                module.layer_config for name, module in
+                self.model.features.named_modules() if (
+                    'denseblock' in name and '.' not in name)],
+            "update_growth_rate": self.model.update_growth_rate,
+            "bc_mode": self.model.bc_mode
+        }
+        with open(self.fname, 'wb') as file:
+            pickle.dump(self.values_dict, file)
+
+    def _save_values_dict(self):
+        """
+        Update the values_dict and save it to the file.
+        """
+        self.values_dict["growth_rate"] = self.model.growth_rate
+        self.values_dict["block_config"] = [
+            module.layer_config for name, module in
+            self.model.features.named_modules() if (
+                'denseblock' in name and '.' not in name)]
+        with open(self.fname, 'wb') as file:
+            pickle.dump(self.values_dict, file)

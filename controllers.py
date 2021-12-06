@@ -17,7 +17,7 @@ from datetime import timedelta, datetime
 from fastai.vision.all import *
 from torch.utils.data import DataLoader, Subset, ConcatDataset
 from torchvision import datasets, transforms
-from callbacks import DensEMANNCallback, ReduceLRCallback, CSVLoggerCustom
+from callbacks import *
 from models import DenseNet
 
 
@@ -115,6 +115,8 @@ class DensEMANN_controller(object):
             self-constructing (default 0.01).
         preserve_transition (bool) - whether or not to preserve the transition
             to classes after layer additions (default True).
+        remove_last_layer (bool) - whether or not to undo the last layer's
+            addition after building a dense block (default True).
 
         expansion_rate (int) - rate at which new convolutions are added
             together during the self-construction of a dense layer (default 1).
@@ -139,17 +141,16 @@ class DensEMANN_controller(object):
             adding new filters during filter-level self-constructing.
         dont_prune_beyond (int) - minimum number of filters that should remain
             after a pruning operation (default 1).
-        acc_lookback (int) - memory window for network accuracies during
-            filter-level self-constructing (the highest accuracy in the window
-            is used as the pre-pruning accuracy level)
-            (default 1, i.e. no look-back window).
         m_re_patience_param (int) - alternate micro-patience parameter for the
             micro-recovery stage (default 1000).
 
-        should_save_model (bool) - whether or not to save the model
-            (default True).
+        should_save_model (bool) - whether or not to save the model and
+            relevant hyperparameters (default True).
         should_save_ft_logs (bool) - whether or not to save feature logs
             (default True).
+        keep_intermediary_model_saves (bool) - whether or not to keep
+            intermediary model saves from DensEMANN after it is used
+            (default False).
         ft_freq (int) - number of epochs between two measurements of values
             (e.g. epoch, accuracy, loss, CS) in feature logs (default 1).
         ft_comma (str) - 'comma' separator in the CSV feature logs
@@ -165,9 +166,11 @@ class DensEMANN_controller(object):
         data (str) - from args (or the default folder if None in args).
         save (str) - from args (or the default folder if None in args).
         growth_rate (int) - from args.
-        block_config (list of int) - the block configuration in list form:
-            a list containing the number of convolution layers in each block
-            (taken from the 'layer_num_list' arg).
+        block_config (list of int or list of list of int) - the block
+            configuration in list form: a list containing the number of
+            convolution layers in each block, and optionally the number of
+            convolution filters in each layer (taken from the 'filter_num_list'
+            arg if it exists, else from the 'layer_num_list' arg).
         keep_prob (float) - from args.
         bc_mode (bool) - model type, True if DenseNet-BC, False if DenseNet
             (taken from the 'model_type' arg).
@@ -196,14 +199,17 @@ class DensEMANN_controller(object):
 
         self_constr_kwargs (dict) - a keyword argument dictionary containing
             block_count, layer_cs, asc_thresh, patience_param, std_tolerance,
-            std_window, impr_thresh, preserve_transition, and optionally also
-            expansion_rate, dkCS_smoothing, dkCS_std_window, dkCS_stl_thresh,
-            auto_usefulness_thresh, auto_uselessness_thresh, m_asc_thresh,
-            m_patience_param, complementarity, dont_prune_beyond, acc_lookback,
-            and m_re_patience_param; all from args.
+            std_window, impr_thresh, preserve_transition, remove_last_layer,
+            and optionally also expansion_rate, dkCS_smoothing,
+            dkCS_std_window, dkCS_stl_thresh, auto_usefulness_thresh,
+            auto_uselessness_thresh, m_asc_thresh, m_patience_param,
+            complementarity, dont_prune_beyond, and m_re_patience_param;
+            all from args.
 
         should_save_model (bool) - from args.
         should_save_ft_logs (bool) - from args.
+        remove_intermediary_model_saves (bool) - should_save_model and not
+            keep_intermediary_model_saves, both from args.
         ft_freq (int) - from args.
         ft_comma (str) - from args.
         ft_decimal (str) - from args.
@@ -235,12 +241,14 @@ class DensEMANN_controller(object):
                  block_count=1, layer_cs='relevance', asc_thresh=10,
                  patience_param=200, std_tolerance=0.1, std_window=50,
                  impr_thresh=0.01, preserve_transition=True,
+                 remove_last_layer=True,
                  expansion_rate=1, dkCS_smoothing=10, dkCS_std_window=30,
                  dkCS_stl_thresh=0.001, auto_usefulness_thresh=0.8,
                  auto_uselessness_thresh=0.2, m_asc_thresh=5,
                  m_patience_param=300, complementarity=True,
-                 dont_prune_beyond=1, acc_lookback=1, m_re_patience_param=1000,
+                 dont_prune_beyond=1, m_re_patience_param=1000,
                  should_save_model=True, should_save_ft_logs=True,
+                 keep_intermediary_model_saves=False,
                  ft_freq=1, ft_comma=';', ft_decimal=',', add_ft_kCS=True):
         """
         Initializer for the DensEMANN_controller class.
@@ -346,7 +354,8 @@ class DensEMANN_controller(object):
                 "asc_thresh": asc_thresh, "patience_param": patience_param,
                 "std_tolerance": std_tolerance, "std_window": std_window,
                 "impr_thresh": impr_thresh,
-                "preserve_transition": preserve_transition}
+                "preserve_transition": preserve_transition,
+                "remove_last_layer": remove_last_layer}
             if self.has_micro_algo:
                 self.self_constr_kwargs.update({
                     "expansion_rate": expansion_rate,
@@ -359,10 +368,11 @@ class DensEMANN_controller(object):
                     "m_patience_param": m_patience_param,
                     "complementarity": complementarity,
                     "dont_prune_beyond": dont_prune_beyond,
-                    "acc_lookback": acc_lookback,
                     "m_re_patience_param": m_re_patience_param})
         self.should_save_model = should_save_model
         self.should_save_ft_logs = should_save_ft_logs
+        self.remove_intermediary_model_saves = (
+            should_save_model and not keep_intermediary_model_saves)
         self.ft_freq = ft_freq
         self.ft_comma = ft_comma
         self.ft_decimal = ft_decimal
@@ -392,16 +402,18 @@ class DensEMANN_controller(object):
                                           self_constr_rlr))
         else:
             if should_self_construct:
-                self.experiment_id = '%s_%s_DensEMANN_var%d_%s_%s' % (
+                self.experiment_id = '%s_%s_DensEMANN_var%d_%s_%s_%s' % (
                     model_type, dataset, self_constructing_var,
                     ("rlr%d" % self_constr_rlr) if should_change_lr
-                    else "NOrlr", datetime.now().strftime("%Y_%m_%d_%H%M%S"))
+                    else "NOrlr", "update-k" if update_growth_rate
+                    else "same-k", datetime.now().strftime("%Y_%m_%d_%H%M%S"))
             else:
-                self.experiment_id = '%s_%s_prebuilt_k=%d_%s=%s_%s_%s' % (
+                self.experiment_id = '%s_%s_prebuilt_k=%d_%s=%s_%s_%s_%s' % (
                     model_type, dataset, growth_rate,
                     "fnl" if filter_num_list else "lnl",
                     filter_num_list if filter_num_list else layer_num_list,
                     "rlr" if should_change_lr else "NOrlr",
+                    "update-k" if update_growth_rate else "same-k",
                     datetime.now().strftime("%Y_%m_%d_%H%M%S"))
             # If using a source model, specify that in the ft-logs.
             if source_experiment_id is not None and self.should_save_ft_logs:
@@ -586,11 +598,14 @@ class DensEMANN_controller(object):
                 rlr_1=self.rlr_1, rlr_2=self.rlr_2,
                 schedule_length=schedule_length,
                 self_construct_mode=self.should_self_construct))
-        # If saving the model, create the callback that saves the best yet.
+        # If saving the model, create the callback that saves the best one yet,
+        # and the callback that saves relevant hyperparameters.
         if self.should_save_model:
             cbs.append(SaveModelCallback(fname=os.path.join(
                 self.save, self.experiment_id + '_model'),
                 every_epoch=not valid_loader))
+            cbs.append(SaveHypersCallback(fname=os.path.join(
+                self.save, self.experiment_id + '_hypers.pkl')))
         # If saving ft-logs, create the callback to write the ft-log file.
         if self.should_save_ft_logs:
             cbs.append(CSVLoggerCustom(fname=os.path.join(
@@ -624,6 +639,18 @@ class DensEMANN_controller(object):
                 print("\tConvolutional: %.1fk" % (cv_par / 1e3))
                 print("\tFully Connected: %.1fk" % (fc_par / 1e3))
                 print("FINAL ARCHITECTURE:\n{}\n".format(self.model))
+                # Delete intermediary model files (if required and they exist).
+                if self.remove_intermediary_model_saves:
+                    prepruning_path = os.path.join(
+                        self.save,
+                        self.experiment_id + '_model_prepruning.pth')
+                    last_layer_path = os.path.join(
+                        self.save,
+                        self.experiment_id + '_model_last_layer.pth')
+                    if os.path.isfile(prepruning_path):
+                        os.remove(prepruning_path)
+                    if os.path.isfile(last_layer_path):
+                        os.remove(last_layer_path)
 
         # TESTING THE MODEL ---------------------------------------------------
         # ---------------------------------------------------------------------

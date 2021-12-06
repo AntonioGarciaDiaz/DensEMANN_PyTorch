@@ -592,6 +592,37 @@ class _DenseBlock(nn.Module):
             [growth_rate for new_l in range(num_new_layers)])
         self.num_output_features += num_new_layers*growth_rate
 
+    def remove_layers(self, num_rm_layers=1):
+        """
+        Adds new layers to the dense block.
+
+        Args:
+            num_rm_layers (int) - number of layers to remove (default 1).
+
+        Returns:
+            filter_ids_range (range) - range of filters corresponding to the
+                removed layers in the transition to classes.
+        """
+        # Get the number of filters before and after layer removal.
+        post_rm_num_filters = sum(
+            k for k in self.layer_config[:-num_rm_layers])
+        pre_rm_num_filters = post_rm_num_filters + sum(
+            k for k in self.layer_config[-num_rm_layers:])
+        # Deduce which filters should be removed in the transition to classes.
+        filter_ids_range = range(post_rm_num_filters, pre_rm_num_filters)
+
+        # Delete each layer to be removed.
+        for i in range(num_rm_layers):
+            exec("del self.denselayer%d" % (self.num_layers - i))
+
+        # Update the number of layers, layer_config and output features.
+        self.num_layers -= num_rm_layers
+        del self.layer_config[-num_rm_layers:]
+        self.num_output_features -= pre_rm_num_filters - post_rm_num_filters
+
+        # Return the range of filters to remove
+        return filter_ids_range
+
 
 class DenseNet(nn.Module):
     """
@@ -899,8 +930,14 @@ class DenseNet(nn.Module):
         """
         # Execute the command to remove the filters (in the right block).
         exec(("self.features.denseblock{}.remove_filters("
-              + "filter_ids={})").format(
-                len(self.block_config), filter_ids))
+              + "filter_ids=filter_ids)").format(len(self.block_config)))
+
+        # Assign the right filter_ids for the transition to classes.
+        k_offset = self.num_features - len(filter_ids)
+        k_offset -= eval(("self.features.denseblock{}.layer_config[-1]"
+                          ).format(len(self.block_config)))
+        print("k_offset = {}".format(k_offset))
+        filter_ids = [id + k_offset for id in filter_ids]
 
         # Reconstruct the transition to classes.
         self.reconstruct_transition_to_classes(
@@ -943,6 +980,29 @@ class DenseNet(nn.Module):
         # Reconstruct the transition to classes.
         self.reconstruct_transition_to_classes(
             preserve_transition=preserve_transition)
+
+    def remove_layers(self, num_rm_layers=1, preserve_transition=True):
+        """
+        Removes layers at the end of the last dense block in the DenseNet.
+
+        Args:
+            num_rm_layers (int) - number of layers to remove (default 1).
+            preserve_transition (bool) - whether or not to preserve the
+                transition to classes (final BatchNorm2D and classifier)
+                (default True).
+        """
+        # Execute the command to remove the layers (in the right dense block).
+        # Also get the filter_ids to remove for the transition to classes.
+        filter_ids_range = eval(
+            "self.features.denseblock{}.remove_layers("
+            "num_rm_layers=num_rm_layers)".format(len(self.block_config)))
+        # Update the block_config.
+        self.block_config[-1] -= num_rm_layers
+
+        # Reconstruct the transition to classes.
+        self.reconstruct_transition_to_classes(
+            preserve_transition=preserve_transition,
+            filter_ids=[id for id in filter_ids_range])
 
     def add_new_block(self, num_layers=1, growth_rate=None, efficient=None):
         """
