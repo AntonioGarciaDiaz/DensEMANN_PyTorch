@@ -53,9 +53,10 @@ def variance_scaling_initializer_(tensor, factor=2.0, mode='fan_none',
     The original TensorFlow variance_scaling_initializer may be found at:
     https://github.com/tensorflow/tensorflow/blob/
     86abbaa083beaca05ee32675ac7bfafb58a4557d/
-    tensorflow/contrib/layers/python/layers/initializers.py
+    tensorflow/contrib/layers/python/layers/initializers.py#L62
     PyTorch initialisers kaiming_uniform_ and kaiming_normal_ can be found at:
-    https://pytorch.org/docs/stable/_modules/torch/nn/init.html
+    https://github.com/pytorch/pytorch/blob/
+    68b18666a92d174d23f960a4e8584ced83524775/torch/nn/init.py#L366
 
     Args:
         tensor (Tensor): an n-dimensional torch.Tensor.
@@ -632,8 +633,10 @@ class DenseNet(nn.Module):
     Args:
         growth_rate (int) - how many filters to add each layer (`k` in paper).
         block_config (list of int or list of list of int) - number of layers in
-            each pooling block, and optionally number of filters in each layer
+            each dense block, and optionally number of filters in each layer
             (default [16, 16, 16]).
+        DensEMANN_init (bool) - whether or not to use the DensEMANN weight
+            initialisation (default True).
         update_growth_rate (bool) - whether or not to update the DenseNet's
             growth rate attribute before each layer/filter addition, using the
             previous layer's final number of filters as the new value
@@ -644,6 +647,8 @@ class DenseNet(nn.Module):
         reduction (float) - reduction (theta) of the number of parameters
             during compression at transition layers in DenseNet-BC
             (between 0 and 1, default 0.5).
+        num_input_features (int) - global number of input feature channels
+            (e.g., 1 for greyscale images, 3 for RGB images) (default 3).
         num_init_features (int) - number of filters to learn in the first
             convolution layer (default 24).
         bn_size (int) - multiplicative factor for number of bottleneck layers
@@ -669,7 +674,7 @@ class DenseNet(nn.Module):
             DenseNet, for outputting class predictions.
         growth_rate (int) - from args.
         block_config (list of int) - from args, but only containing the number
-            of layers in each pooling block.
+            of layers in each dense block.
         update_growth_rate (bool) - from args.
         bc_mode (bool) - from args.
         reduction (float) - from args.
@@ -679,10 +684,10 @@ class DenseNet(nn.Module):
         efficient (bool) - from args, becomes default for layer additions.
     """
     def __init__(self, growth_rate=12, block_config=[16, 16, 16],
-                 update_growth_rate=True, bc_mode=True, reduction=0.5,
-                 num_init_features=24, bn_size=4, drop_rate=0,
-                 num_classes=10, small_inputs=True, efficient=False,
-                 seed=None):
+                 DensEMANN_init=True, update_growth_rate=True, bc_mode=True,
+                 reduction=0.5, num_input_features=3, num_init_features=24,
+                 bn_size=4, drop_rate=0, num_classes=10, small_inputs=True,
+                 efficient=False, seed=None):
         """
         Initialiser for the DenseNet class.
 
@@ -711,7 +716,7 @@ class DenseNet(nn.Module):
         else:
             self.reduction = 1
 
-        # Set seed manually if required.
+        # Set seed manually if specified.
         if seed is not None:
             random.seed(seed)
             os.environ['PYTHONHASHSEED'] = str(seed)
@@ -726,13 +731,15 @@ class DenseNet(nn.Module):
         # The "features" Sequential is created at the same time.
         if small_inputs:
             self.features = nn.Sequential(OrderedDict([
-                ('conv0', nn.Conv2d(3, num_init_features, kernel_size=3,
-                                    stride=1, padding=1, bias=False)),
+                ('conv0', nn.Conv2d(num_input_features, num_init_features,
+                                    kernel_size=3, stride=1, padding=1,
+                                    bias=False)),
             ]))
         else:
             self.features = nn.Sequential(OrderedDict([
-                ('conv0', nn.Conv2d(3, num_init_features, kernel_size=7,
-                                    stride=2, padding=3, bias=False)),
+                ('conv0', nn.Conv2d(num_input_features, num_init_features,
+                                    kernel_size=7, stride=2, padding=3,
+                                    bias=False)),
                 ('norm0', nn.BatchNorm2d(num_init_features)),
                 ('relu0', nn.ReLU(inplace=True)),
                 ('pool0', nn.MaxPool2d(kernel_size=3, stride=2, padding=1,
@@ -786,10 +793,10 @@ class DenseNet(nn.Module):
         for name, param in self.named_parameters():
             # print(name)
             if 'conv' in name and 'weight' in name:
-                if bc_mode and 'conv1' in name:
-                    variance_scaling_initializer_(param.data, mode='fan_in')
-                else:
+                if DensEMANN_init and not (bc_mode and 'conv1' in name):
                     variance_scaling_initializer_(param.data, mode='fan_none')
+                else:
+                    variance_scaling_initializer_(param.data, mode='fan_in')
             elif 'norm' in name and 'weight' in name:
                 param.data.fill_(1)
             elif 'norm' in name and 'bias' in name:
@@ -867,7 +874,7 @@ class DenseNet(nn.Module):
         new_classifier.weight.data.fill_(1)
         new_classifier.bias.data.fill_(0)
 
-        # If required, copy the data from the old transition to classes.
+        # If specified, copy the data from the old transition to classes.
         if preserve_transition:
             # Identify which filter indexes to keep, and where to copy them.
             if filter_ids is None:
@@ -936,7 +943,7 @@ class DenseNet(nn.Module):
         k_offset = self.num_features - len(filter_ids)
         k_offset -= eval(("self.features.denseblock{}.layer_config[-1]"
                           ).format(len(self.block_config)))
-        print("k_offset = {}".format(k_offset))
+        # print("k_offset = {}".format(k_offset))
         filter_ids = [id + k_offset for id in filter_ids]
 
         # Reconstruct the transition to classes.
@@ -958,7 +965,7 @@ class DenseNet(nn.Module):
             efficient (bool) - set to True to use checkpointing
                 (default None, i.e. use the value provided at creation).
         """
-        # Before any operations, update the growth rate value if required.
+        # Before any operations, update the growth rate value if specified.
         if self.update_growth_rate:
             exec("self.growth_rate = self.features.denseblock{}."
                  "layer_config[-1]".format(len(self.block_config)))
@@ -1017,7 +1024,7 @@ class DenseNet(nn.Module):
             efficient (bool) - set to True to use checkpointing
                 (default None, i.e. use the value provided at creation).
         """
-        # Before any operations, update the growth rate value if required.
+        # Before any operations, update the growth rate value if specified.
         if self.update_growth_rate:
             exec("self.growth_rate = self.features.denseblock{}."
                  "layer_config[-1]".format(len(self.block_config)))
@@ -1072,28 +1079,44 @@ class DenseNet(nn.Module):
         self.classifier.weight.data.fill_(1)
         self.classifier.bias.data.fill_(0)
 
-    def count_trainable_params(self):
+    def count_trainable_params(self, count_in_use=False):
         """
         Count the total number of trainable parameters in the DenseNet model,
         as well as the number of parameters corresponding to the convolutional
         and fully-connected (classifier) parts of the model.
 
+        Args:
+            count_in_use (bool) - whether or not to count the parameters
+                actually 'in use' (i.e. those whose values are not zero)
+                (default False).
+
         Returns:
             total_parameters (int) - total number of parameters in the model.
+            params_in_use (int, optional) - number of parameters 'in use',
+                only returned if count_in_use is set to True.
             conv_params (int) - number of parameters belonging to the
-                convolutional part of the model.
+                convolutional part of the model, and 'in use' if count_in_use.
             fc_params (int) - number of parameters belonging to the
-                fully-connected part of the model (i.e., the classifier).
+                fully-connected part of the model (i.e., the classifier), and
+                'in use' if count_in_use.
         """
         total_parameters = 0
+        params_in_use = 0
         conv_params = 0
         fc_params = 0
 
         for name, param in self.named_parameters():
             total_parameters += param.numel()
+            actual_numel = (param.data.count_nonzero() if count_in_use
+                            else param.numel())
+            if count_in_use:
+                params_in_use += actual_numel
             if 'classifier' in name:
-                fc_params += param.numel()
+                fc_params += actual_numel
             else:
-                conv_params += param.numel()
+                conv_params += actual_numel
 
-        return total_parameters, conv_params, fc_params
+        if count_in_use:
+            return total_parameters, params_in_use, conv_params, fc_params
+        else:
+            return total_parameters, conv_params, fc_params

@@ -20,17 +20,37 @@ if __name__ == '__main__':
         help='Train the model.')
     parser.add_argument(
         '--test', action='store_true',
-        help='Test model for required dataset if pretrained model exists.'
+        help='Test model for specified dataset if pretrained model exists.'
              'If provided together with `--train` flag testing will be'
              'performed right after training.')
     parser.set_defaults(train=False)
     parser.set_defaults(test=False)
 
+    # PARAMETERS RELATED TO LOADING AND SAVING FILES --------------------------
+    # -------------------------------------------------------------------------
     # In case an existing model should be reused.
     parser.add_argument(
         '--source_experiment_id', '--source_id', default=None,
         dest='source_experiment_id', type=str,
         help='Experiment ID for the existing model to load.')
+    parser.add_argument(
+        '--import-trainable-values-and-architecture',
+        '--import-weights-and-architecture',
+        '--import-trainable-values-and-hyperparameters',
+        '--import-weights-and-hyperparameters',
+        '--import-trainable-values-and-hypers', '--import-weights-and-hypers',
+        '--import-trainable-values', '--import-weights',
+        dest='import_weights', action='store_true',
+        help='Import the weights and trainable values from the existing model'
+             ' (as specified in the model file) as well as the architecture.')
+    parser.add_argument(
+        '--import-only-architecture', '--import-only-hyperparameters',
+        '--import-only-hypers', '--no-import-trainable-values',
+        '--no-import-weights',
+        dest='import_weights', action='store_false',
+        help='Do not import the weights and trainable values from the'
+             ' existing model (i.e. only import the architecture).')
+    parser.set_defaults(import_weights=True)
     parser.add_argument(
         '--reuse-existing-files', '--reuse-files',
         dest='reuse_files', action='store_true',
@@ -41,8 +61,6 @@ if __name__ == '__main__':
         help='Create new files, do not reuse files for existing model.')
     parser.set_defaults(reuse_files=False)
 
-    # GENERAL EXECUTION PARAMETERS --------------------------------------------
-    # -------------------------------------------------------------------------
     # Paths for loading and saving data.
     parser.add_argument(
         '--data', dest='data', type=str, default=None,
@@ -53,7 +71,10 @@ if __name__ == '__main__':
         help='Path to directory where the model and ft-logs should be saved to'
              ' (default None, i.e. a \'ft-logs\' folder in the current working'
              ' directory).')
-    # Parameters that define the current DenseNet model.
+
+    # GENERAL EXECUTION PARAMETERS --------------------------------------------
+    # -------------------------------------------------------------------------
+    # Hyperarameters that define the current DenseNet model.
     parser.add_argument(
         '--growth_rate', '-k', dest='growth_rate', type=int,
         default=12,  # choices in paper: 12, 24, 40.
@@ -114,8 +135,9 @@ if __name__ == '__main__':
              ' (default \'DenseNet-BC\').')
     parser.add_argument(
         '--dataset', '-ds', dest='dataset', type=str,
-        choices=['C10', 'C10+', 'C100', 'C100+', 'SVHN'], default='C10+',
-        help='dataset name, if followed by a \'+\' data augmentation is added'
+        choices=['C10', 'C10+', 'C100', 'C100+', 'SVHN',
+                 'FMNIST', 'FMNIST+', 'FER2013', 'FER2013+'], default='C10+',
+        help='Dataset name, if followed by a \'+\' data augmentation is added'
              ' (default \'C10+\', i.e. CIFAR-10 with data augmentation)')
     parser.add_argument(
         '--reduction', '-red', '-theta', dest='reduction',
@@ -173,12 +195,14 @@ if __name__ == '__main__':
     parser.add_argument(
         '--reduce_learning_rate_1', '--rlr_1', '-rlr1',
         dest='rlr_1', type=float, default=0.5,
-        help='First scheduling milestone for multiplying the LR by gamma'
+        help='First scheduling milestone for multiplying the LR by gamma,'
+             ' if following DensEMANN\'s LR modification schedule'
              ' (default 0.5, i.e. 50% through the training process).')
     parser.add_argument(
         '--reduce_learning_rate_2', '--rlr_2', '-rlr2',
         dest='rlr_2', type=float, default=0.75,
-        help='Second scheduling milestone for multiplying the LR by gamma'
+        help='Second scheduling milestone for multiplying the LR by gamma,'
+             ' if following DensEMANN\'s LR modification schedule'
              ' (default 0.75, i.e. 75% through the training process).')
     parser.add_argument(
         '--weight_decay', '-wd', dest='wd', type=float, default=1e-4,
@@ -205,6 +229,16 @@ if __name__ == '__main__':
              ' architecture.')
     parser.set_defaults(should_self_construct=True)
     parser.add_argument(
+        '--pruning', '--prune', '--sparsification', '--sparsify', '--spars',
+        dest='should_sparsify', action='store_true',
+        help='If not using DensEMANN, run a scheduled sparsification on the'
+             ' network (zero-out learnable parameters to \'prune\' them).')
+    parser.add_argument(
+        '--no-pruning', '--no-prune', '--no-sparsification', '--no-sparsify',
+        '--no-spars', dest='should_sparsify', action='store_false',
+        help='Do not run a scheduled sparsification on the network.')
+    parser.set_defaults(should_sparsify=False)
+    parser.add_argument(
         '--change-learning-rate', '--change-lr',
         dest='should_change_lr', action='store_true',
         help='Allow any modifications to the LR as defined in the training'
@@ -222,7 +256,7 @@ if __name__ == '__main__':
     # DensEMANN-RELATED PARAMETERS --------------------------------------------
     # -------------------------------------------------------------------------
 
-    # Parameters that define the DensEMANN variant to be used.
+    # Parameters that define the DensEMANN variant to use.
     parser.add_argument(
         '--DensEMANN_variant', '--DensEMANN_var',
         '--self_constructing_variant', '--self_constructing_var',
@@ -240,8 +274,8 @@ if __name__ == '__main__':
         '--self_constructing_reduce_lr', '--self_constructing_rlr',
         '--self_constr_reduce_lr', '--self_constr_rlr', '-rlr',
         dest='self_constr_rlr', type=int, default=0,
-        help='Choice on the learning rate reduction variant to be used with'
-             ' the DensEMANN algorithm (from oldest to newest).'
+        help='Choice on the learning rate reduction variant to use with the'
+             ' DensEMANN algorithm (from oldest to newest).'
              ' Variants are identified by an int value (0, 1).'
              ' They are described in the ReduceLRCallback, in the'
              ' activation_switch function (where they take effect).'
@@ -288,7 +322,7 @@ if __name__ == '__main__':
              ' previous accuracies (std_window) goes below std_tolerance,'
              ' the ascension stage ends.')
     parser.add_argument(
-        '--accuracy_std_window', '--std_window', '-stdw',
+        '--accuracy_std_window', '--acc_std_window', '--std_window', '-stdw',
         dest='std_window', type=int, default=50,
         help='Accuracy St.D. window, used for self-constructing at layer'
              ' level in DensEMANN variants 2, 3 and 7.'
@@ -297,7 +331,9 @@ if __name__ == '__main__':
              ' (this happens when the St.D. of these accuracy values is below'
              ' std_tolerance).')
     parser.add_argument(
-        '--accuracy_improvement_threshold', '--impr_thresh', '-it',
+        '--accuracy_improvement_threshold', '--accuracy_impr_thresh',
+        '--acc_improvement_threshold', '--acc_impr_thresh',
+        '--improvement_threshold', '--impr_thresh', '-it',
         dest='impr_thresh', type=float, default=0.01,
         help='Accuracy improvement threshold, used for self-constructing at'
              ' layer level in DensEMANN variants 4 onwards. Minimum absolute'
@@ -444,6 +480,148 @@ if __name__ == '__main__':
              ' if pre-pruning accuracy (the usual condition for stopping this'
              ' stage) cannot be reached.')
 
+    # PARAMETERS USED FOR PROCESSES NOT RRELATED TO DensEMANN -----------------
+    # -------------------------------------------------------------------------
+
+    # General sparsification-related parameters.
+    parser.add_argument(
+        '--end_sparsity', '--end_spars',
+        dest='end_sparsity', type=float, default=50,
+        help='Value between 0 and 100, corresponding to the percentage of the'
+             ' trainable parameters that should be zeroed-out during scheduled'
+             ' sparsification.')
+    parser.add_argument(
+        '--sparsifier_granularity', '--spars_granularity', '--granularity',
+        dest='spars_granularity', type=str,
+        choices=['weight', 'shared_weight', 'column', 'row', 'channel',
+                 'kernel', 'filter'], default='filter',
+        help='Granularity for sparsification. The choice is between 0D'
+             ' \'weight\' level (with the possibility of applying the same'
+             ' pattern to all filters via \'shared_weight\'), 1D \'column\','
+             ' \'row\' and \'channel\' levels, 2D \'kernel\' level, and 3D'
+             ' \'filter\' level (default). More info at:'
+             ' https://nathanhubens.github.io/fasterai/sparsifier.html')
+    parser.add_argument(
+        '--sparsifier_method', '--spars_method', '--method',
+        dest='spars_method', type=str,
+        choices=['local', 'global'], default='global',
+        help='Method for sparsification: either \'local\' (sparsify each layer'
+             ' separately), or \'global\' (default, sparsify the network as a'
+             ' whole).')
+    parser.add_argument(
+        '--sparsifier_schedule_function', '--sparsifier_schedule_func',
+        '--sparsifier_sched_function', '--sparsifier_sched_func',
+        '--spars_schedule_function', '--spars_schedule_func',
+        '--spars_sched_function', '--spars_sched_func',
+        dest='spars_sched_func', type=str,
+        choices=['one_shot', 'iterative', 'sched_agp', 'sched_onecycle',
+                 'sched_dsd'], default='sched_agp',
+        help='Schedule function for the sparsifier. Choice is between'
+             ' one_shot, iterative, sched_agp, sched_onecycle, and sched_dsd.'
+             ' N.B.: one_shot and iterative are meant to be used with a start'
+             ' epoch, as they are not gradual pruning schedules. More info at:'
+             ' https://nathanhubens.github.io/fasterai/schedules.html')
+    parser.add_argument(
+        '--sparsification_start_epoch', '--sparsifier_start_epoch',
+        '--spars_start_epoch', dest='spars_start_epoch', type=int, default=0,
+        help='Training epoch at which the scheduled sparsification starts.')
+    parser.add_argument(
+       '--sparsification_end_epoch', '--sparsifier_end_epoch',
+       '--spars_end_epoch', dest='spars_end_epoch', type=int, default=None,
+       help='Training epoch at which the scheduled sparsification ends.'
+            ' If None (default), the sparsification ends at the end of the'
+            ' training.')
+    parser.add_argument(
+       '--lottery-ticket-hypothesis', '--lottery-ticket', '--lth',
+       dest='lth', action='store_true',
+       help='Perform \'Lottery Ticket Hypothesis\'-style rewinding after every'
+            ' pruning operation during the scheduled sparsification.'
+            ' Original LTH paper (Frankle and Carbin, 2019):'
+            ' https://arxiv.org/abs/1803.03635')
+    parser.add_argument(
+       '--no-lottery-ticket-hypothesis', '--no-lottery-ticket', '--no-lth',
+       dest='lth', action='store_false',
+       help='Do not perform \'Lottery Ticket Hypothesis\'-style rewinding'
+            ' after every pruning operation during the scheduled'
+            ' sparsification.')
+    parser.set_defaults(lth=False)
+    parser.add_argument(
+       '--lth_rewind_epoch', '--lth_rewind', '--rewind_epoch',
+       dest='lth_rewind_epoch', type=int, default=0,
+       help='Reference training epoch for LTH-style rewinding.')
+
+    # Sparsification parameters that are specific to each schedule function.
+    parser.add_argument(
+        '--sparsification_iterative_n_steps', '--sparsifier_iterative_n_steps',
+        '--spars_iterative_n_steps', '--iterative_n_steps',
+        dest='spars_iterative_n_steps', type=int, default=3,
+        help='Number of steps for the iterative schedule function.')
+    parser.add_argument(
+        '--sparsification_sched_onecycle_alpha',
+        '--sparsifier_sched_onecycle_alpha', '--spars_sched_onecycle_alpha',
+        '--sched_onecycle_alpha',
+        '--sparsification_onecycle_alpha', '--sparsifier_onecycle_alpha',
+        '--spars_onecycle_alpha', '--onecycle_alpha',
+        dest='spars_sched_onecycle_alpha', type=float, default=14,
+        help='Alpha value for the sched_onecycle schedule function.')
+    parser.add_argument(
+        '--sparsification_sched_onecycle_beta',
+        '--sparsifier_sched_onecycle_beta', '--spars_sched_onecycle_beta',
+        '--sched_onecycle_beta',
+        '--sparsification_onecycle_beta', '--sparsifier_onecycle_beta',
+        '--spars_onecycle_beta', '--onecycle_beta',
+        dest='spars_sched_onecycle_beta', type=float, default=6,
+        help='Beta value for the sched_onecycle schedule function.')
+    parser.add_argument(
+        '--sparsification_sched_dsd_middle', '--sparsifier_sched_dsd_middle',
+        '--spars_sched_dsd_middle', '--sched_dsd_middle',
+        '--sparsification_dsd_middle', '--sparsifier_dsd_middle',
+        '--spars_dsd_middle', '--dsd_middle',
+        dest='spars_sched_dsd_middle', type=float, default=None,
+        help='Spasity percentage at the middle of the pruning for the'
+             ' sched_dsd schedule function. If None (default), the percentage'
+             ' corresponds to halfway between the specified end sparsity and'
+             ' 100% (full zero-out).')
+
+    # Learning rate reduction schedules (mostly used for prebuilt networks).
+    parser.add_argument(
+        '--reduce_learning_rate_start_epoch', '--rlr_start_epoch',
+        dest='rlr_start_epoch', type=int, default=0,
+        help='If the learning rate is modified, number of epochs elapsed'
+             ' between the activation of scheduled LR modifications and the'
+             ' actual start of the schedule.')
+    parser.add_argument(
+        '--reduce_learning_rate_end_epoch', '--rlr_end_epoch',
+        dest='rlr_end_epoch', type=int, default=None,
+        help='If the learning rate is modified, number of epochs elapsed'
+             ' between the activation of scheduled LR modifications and the'
+             ' end of the schedule. A None value (default) is interpreted as'
+             ' the length of a \'patience\' cycle if using a DensEMANN'
+             ' variant that features them, or otherwise the value of n_epochs')
+    parser.add_argument(
+        '--prebuilt_reduce_lr', '--prebuilt_rlr',
+        '--no_self_constructing_reduce_lr', '--no_self_constructing_rlr',
+        '--no_self_constr_reduce_lr', '--no_self_constr_rlr', '-prlr',
+        dest='prebuilt_rlr', type=str,
+        choices=['DensEMANN', 'lin', 'cos', 'exp', 'poly'],
+        default='DensEMANN',
+        help='Choice on the learning rate reduction schedule to apply when'
+             ' training prebuilt networks. The choice is between \'DensEMANN\''
+             ' (default, i.e. the schedule that is used for DensEMANN\'s'
+             ' learning rate reduction), \'lin\' i.e. linear, \'cos\' i.e.'
+             ' cosine, \'exp\' i.e. exponential, and \'poly\' i.e. polynomial'
+             ' with degree 0.5.')
+
+    # Other.
+    parser.add_argument(
+        '--DensEMANN-init', dest='DensEMANN_init', action='store_true',
+        help='Use the DensEMANN initialization method for prebuilt DenseNets.')
+    parser.add_argument(
+        '--standard-init', dest='DensEMANN_init', action='store_false',
+        help='Do not use the DensEMANN initialization method for prebuilt'
+             ' DenseNets.')
+    parser.set_defaults(DensEMANN_init=True)
+
     # LOGS AND SAVES RELATED PARAMETERS ---------------------------------------
     # -------------------------------------------------------------------------
 
@@ -468,6 +646,34 @@ if __name__ == '__main__':
 
     # Parameters related to model saves.
     parser.add_argument(
+        '--save-model-every-epoch', '--save-every-epoch', '--every-epoch',
+        dest='save_model_every_epoch', action='store_true',
+        help='Save the model every epoch (or rather, every time a ft-log entry'
+             ' is written).')
+    parser.add_argument(
+        '--save-model-every-improvement', '--save-every-improvement',
+        '--every-improvement', '--save-model-every-impr', '--save-every-impr',
+        '--every-impr',
+        '--no-save-model-every-epoch', '--no-save-every-epoch',
+        '--no-every-epoch',
+        dest='save_model_every_epoch', action='store_false',
+        help='Save the model only when there is an improvement in the'
+             ' validation loss, or when DensEMANN requires it.'
+             ' N.B.: This is only functional when a validation set is used'
+             ' (i.e. when valid_size is not set to 0).')
+    parser.set_defaults(save_model_every_epoch=False)
+    parser.add_argument(
+        '--save_model_every_epoch_until', '--save_every_epoch_until',
+        '--every_epoch_until',
+        dest='every_epoch_until', type=int, default=None,
+        help='Used for setting a limited number of epochs during which the'
+             ' model is saved every epoch. After this limit, the model is only'
+             ' saved if there is an improvement in the validation loss, or'
+             ' when DensEMANN requires it. A None value (default) means that'
+             ' there is no such limit.'
+             ' N.B.: If this parameter is set to an integer value,'
+             ' save_model_every_epoch is automatically set to True.')
+    parser.add_argument(
         '--keep-intermediary-model-saves', '--keep-intermediary-saves',
         '--intermediary-model-saves', '--intermediary-saves',
         dest='keep_intermediary_model_saves', action='store_true',
@@ -488,7 +694,9 @@ if __name__ == '__main__':
         '--feature_frequency', '--feature_freq', '--ft_freq', '-ffq',
         '--feature_period', '--ft_period', '-fp',
         dest='ft_freq', type=int, default=1,
-        help='Number of epochs between each measurement of feature values'
+        help='Number of epochs between two entries in feature logs, containing'
+             ' measurements of values (e.g. epoch, accuracy, loss, CS),'
+             ' and between two model saves if save_model_every_epoch is True'
              ' (default 1).')
     parser.add_argument(
         '--ft_comma_separator', '--ft_comma', '-comma',
@@ -516,18 +724,26 @@ if __name__ == '__main__':
 
     # Perform settings depending on the parsed arguments.
     if not args.keep_prob:
-        if args.dataset in ['C10', 'C100', 'SVHN']:
+        if args.dataset[-1] != "+":
             args.keep_prob = 0.8
         else:
             args.keep_prob = 1.0
     if not args.train_size:
         if args.dataset in ['SVHN', 'SVHN+']:
             args.train_size = 6000
+        elif args.dataset in ['FMIST', 'FMIST+']:
+            args.train_size = 54000
+        elif args.dataset in ['FER2013', 'FER2013+']:
+            args.train_size = 29068
         else:
             args.train_size = 45000
     if not args.valid_size:
         if args.dataset in ['SVHN', 'SVHN+']:
             args.valid_size = 6000
+        elif args.dataset in ['FMIST', 'FMIST+']:
+            args.valid_size = 6000
+        elif args.dataset in ['FER2013', 'FER2013+']:
+            args.valid_size = 3230
         else:
             args.valid_size = 5000
     if args.model_type == 'DenseNet':

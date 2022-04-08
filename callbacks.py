@@ -9,13 +9,13 @@
 #   https://github.com/ikhlestov/vision_networks
 
 import numpy as np
-import os
 import pickle
 import time
 import torch
 from collections import deque
 from datetime import timedelta
 from fastai.vision.all import *
+from modded_callbacks import *
 from models import DenseNet
 
 
@@ -82,12 +82,13 @@ class DensEMANNCallback(Callback):
             last accuracies measured on the validation set.
         reduce_lr_callback (ReduceLRCallback or None) - optional reference
             to the ReduceLRCallback if it exists and is being used.
-        save_model_callback (SaveModelCallback or None) - optional reference
-            to the SaveModelCallback if it exists and is being used.
+        save_model_callback (SaveModelCallback, CustomSaveModelCallback or
+            None) - optional reference to the callback that saves the model if
+            it exists and is being used.
         save_hypers_callback (SaveHypersCallback or None) - optional reference
             to the SaveHypersCallback if it exists and is being used.
-        csv_logger_callback (CSVLoggerCustom or None) - optional reference
-            to the CSVLoggerCustom if it exists and is being used.
+        csv_logger_callback (CustomCSVLogger or None) - optional reference
+            to the CustomCSVLogger if it exists and is being used.
         init_num_filters (int) - initial number of convolution filters with
             which the last DenseNet layer was created.
         kCS_list_ref (list of float) - a list of reference kCS values used for
@@ -235,12 +236,14 @@ class DensEMANNCallback(Callback):
                 c for c in self.learn.cbs if isinstance(c, ReduceLRCallback))
         if self.should_save_model:
             self.save_model_callback = next(
-                c for c in self.learn.cbs if isinstance(c, SaveModelCallback))
+                c for c in self.learn.cbs if isinstance(
+                    c, CustomSaveModelCallback) or isinstance(
+                    c, SaveModelCallback))
             self.save_hypers_callback = next(
                 c for c in self.learn.cbs if isinstance(c, SaveHypersCallback))
         if self.should_save_ft_logs:
             self.csv_logger_callback = next(
-                c for c in self.learn.cbs if isinstance(c, CSVLoggerCustom))
+                c for c in self.learn.cbs if isinstance(c, CustomCSVLogger))
         # Keep references to some of the DenseNet model attributes.
         self.init_num_filters = self.learn.model.growth_rate
         # kCS and dkCS FIFO lists are only used in variants with a
@@ -261,9 +264,9 @@ class DensEMANNCallback(Callback):
         if torch.cuda.is_available():
             self.learn.model = self.learn.model.cuda()
         # Wrap model for multi-GPUs, if available and necessary.
-        if torch.cuda.is_available() and torch.cuda.device_count() > 1:
-            self.learn.model = torch.nn.DataParallel(
-                self.learn.model).cuda()
+        # if torch.cuda.is_available() and torch.cuda.device_count() > 1:
+        #     self.learn.model = torch.nn.DataParallel(
+        #         self.learn.model).cuda()
         # Save the model using the SaveModelCallback.
         if self.should_save_model:
             self.save_model_callback._save(f'{self.save_model_callback.fname}')
@@ -716,8 +719,8 @@ class DensEMANNCallback(Callback):
                     self.set_algorithm_stage(micro_stage=0)
                     self.set_expected_end(epoch + 2*(self.m_patience_param+1))
                 else:
-                    # undo the previous layer addition if required by args
-                    # and saving the model
+                    # undo the previous layer addition if specified by user,
+                    # and if saving the model
                     if self.remove_last_layer and self.should_save_model:
                         print("Restoring model state before previous layer "
                               "addition.")
@@ -961,8 +964,8 @@ class DensEMANNCallback(Callback):
                         self.reduce_lr_callback.activation_switch(
                             reset_lr=True)
                 else:
-                    # undo the previous layer addition if required by args
-                    # and saving the model
+                    # undo the previous layer addition if specified by user,
+                    # and if saving the model
                     if self.remove_last_layer and self.should_save_model:
                         print("Restoring model state before previous layer "
                               "addition.")
@@ -1206,8 +1209,8 @@ class DensEMANNCallback(Callback):
                         self.reduce_lr_callback.activation_switch(
                             reset_lr=True)
                 else:
-                    # undo the previous layer addition if required by args
-                    # and saving the model
+                    # undo the previous layer addition if specified by user,
+                    # and if saving the model
                     if self.remove_last_layer and self.should_save_model:
                         print("Restoring model state before previous layer "
                               "addition.")
@@ -1302,6 +1305,7 @@ class DensEMANNCallback(Callback):
                 elif (epoch-self.asc_ref_epoch) % self.asc_thresh == 0:
                     self.accuracy_last_layer = accuracy
                     self.add_new_layers(
+                        growth_rate=self.init_num_filters,
                         preserve_transition=self.preserve_transition)
 
         # stage #1 = improvement stage
@@ -1461,17 +1465,20 @@ class DensEMANNCallback(Callback):
                 self.accuracy_pre_pruning = 0
                 # check if the accuracy has improved since the last layer
                 # if so, add a layer, else go to the final stage
+                # (for the first layer addition, the growth rate is the current
+                # layer's number of filters).
                 if abs(accuracy-self.accuracy_last_layer) >= self.impr_thresh:
                     self.accuracy_last_layer = accuracy
-                    self.add_new_layers(
+                    self.add_new_layers(growth_rate=(
+                            len(self.kCS_FIFO) if
+                            self.learn.model.block_config[-1] == 1 else None),
                         preserve_transition=self.preserve_transition)
                     # alt. number of filters = half the previous
                     # layer's number if during the ascension stage.
                     #     growth_rate=floor(
                     #         len(self.filters_ref_list[-1][-1])/2))
-                    # if this is the first layer addition, adapt the DenseNet's
-                    # growth rate and go to the ascension stage,
-                    # else resume the current stage (improvement).
+                    # if this is the first layer addition, go to the ascension
+                    # stage, else resume the current stage (improvement).
                     if self.learn.model.block_config[-1] == 2:
                         self.set_algorithm_stage(algorithm_stage=0)
                         self.asc_ref_epoch = epoch
@@ -1487,8 +1494,8 @@ class DensEMANNCallback(Callback):
                             self.reduce_lr_callback.activation_switch(
                                 reset_lr=True)
                 else:
-                    # undo the previous layer addition if required by args
-                    # and saving the model
+                    # undo the previous layer addition if specified by user,
+                    # and if saving the model
                     if self.remove_last_layer and self.should_save_model:
                         print("Restoring model state before previous layer "
                               "addition.")
@@ -1635,6 +1642,9 @@ class ReduceLRCallback(Callback):
             gamma (default 0.5, i.e. 50% through the training process).
         rlr_2 (float) - second scheduling milestone for multiplying the LR by
             gamma (default 0.75, i.e. 75% through the training process).
+        first_epoch (int) - epoch at which the LR schedule begins
+            (in self_construct_mode, number of epochs to wait after the LR
+            schedule is re-activated) (default 0).
         schedule_length (int or None) - length of the LR schedule in training
             epochs, with a None value interpreted as 'the total number of
             training epochs' (default None).
@@ -1648,9 +1658,9 @@ class ReduceLRCallback(Callback):
         gamma (float) - from args.
         rlr_1 (float) - from args.
         rlr_2 (float) - from args.
-        first_epoch (int) - epoch at which the LR schedule begins (0 if not in
-            self_construct_mode, else it is the epoch in which the LR
-            schedule is re-activated).
+        first_epoch (int) - the epoch in which the LR schedule was last
+            reactivated + the first_epoch value from args.
+        first_epoch_ref (int) - the actual first_epoch value from args.
         schedule_length (int) - from args (with None values interpreted as
             specified in args).
         active (bool) - whether or not the LR schedule is active.
@@ -1658,7 +1668,8 @@ class ReduceLRCallback(Callback):
     order = 75
 
     def __init__(self, rlr_var=0, lr=0.1, gamma=0.1, rlr_1=0.5, rlr_2=0.75,
-                 schedule_length=None, self_construct_mode=False):
+                 first_epoch=0, schedule_length=None,
+                 self_construct_mode=False):
         """
         Initializer for the ReduceLRCallback.
         """
@@ -1668,7 +1679,8 @@ class ReduceLRCallback(Callback):
         self.gamma = gamma
         self.rlr_1 = rlr_1
         self.rlr_2 = rlr_2
-        self.first_epoch = 0
+        self.first_epoch = first_epoch
+        self.first_epoch_ref = first_epoch
         self.schedule_length = schedule_length
         # In self_construct_mode, the schedule is deactivated.
         self.active = not self_construct_mode
@@ -1686,7 +1698,7 @@ class ReduceLRCallback(Callback):
                 initial value, regardless of rlr_var (default False).
         """
         self.active = True
-        self.first_epoch = self.learn.epoch
+        self.first_epoch = self.learn.epoch + self.first_epoch_ref
         if self.rlr_var == 0 or reset_lr:
             self.current_lr = self.initial_lr
 
@@ -1709,7 +1721,8 @@ class ReduceLRCallback(Callback):
         """
         At every batch, the learning rate is updated.
         """
-        self.opt.set_hyper('lr', self.current_lr)
+        if self.opt is not None:
+            self.opt.set_hyper('lr', self.current_lr)
 
     def after_train(self):
         """
@@ -1734,97 +1747,6 @@ class ReduceLRCallback(Callback):
                 self.active = False
 
 
-class CSVLoggerCustom(Callback):
-    """
-    Modification of the fastai CSVLogger callback.
-    (https://github.com/fastai/fastai/blob/
-    6354225a2a275026ee8e69e9977c050ebe6ed008/fastai/callback/progress.py#L93)
-    Log the results displayed in 'learn.path/fname', using special chars for
-    commas (separators) and decimals as specified by the user.
-
-    Args:
-        fname (str) - the file name for the CSV log (default 'history.csv').
-        add_ft_kCS (bool) - whether or not to add the kCS values from filters
-            in each layer to the CSV log.
-        ft_comma (str) - 'comma' separator in the CSV logs (default ';').
-        ft_decimal (str) - 'decimal' separator in the CSV logs (default ',').
-
-    Attributes:
-        append (bool) - whether or not to append lines to an existing CSV log
-            (if the file exists, lines are appended to it).
-        fname (str) - from args.
-        add_ft_kCS (bool) - from args.
-        ft_comma (str) - from args.
-        ft_decimal (str) - from args.
-    """
-    order = 61
-
-    def __init__(self, fname='history.csv',  add_ft_kCS=True,
-                 ft_comma=';', ft_decimal=','):
-        """
-        Initializer for the CSVLoggerCustom callback.
-        """
-        self.fname = Path(fname)
-        self.append = os.path.isfile(self.fname)
-        self.add_ft_kCS = add_ft_kCS
-        self.ft_comma = ft_comma
-        self.ft_decimal = ft_decimal
-
-    def read_log(self):
-        """
-        Convenience method to quickly access the log.
-        """
-        return pd.read_csv(self.path/self.fname)
-
-    def before_fit(self):
-        """
-        Prepare file with metric names.
-        """
-        if hasattr(self, "gather_preds"):
-            return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.file = (self.path/self.fname).open('a' if self.append else 'w')
-        self.file.write(self.ft_comma.join(self.recorder.metric_names))
-        if self.add_ft_kCS:
-            self.file.write(2*self.ft_comma + 'kCS for each layer\n')
-        else:
-            self.file.write('\n')
-        self.old_logger, self.learn.logger = self.logger, self._write_line
-
-    def _write_line(self, log):
-        """
-        Write a line with 'log' (and optionally also the kCS),
-        and call the old logger.
-        """
-        # Features in 'log'.
-        self.file.write(self.ft_comma.join(
-            [str(t).replace('.', self.ft_decimal) for t in log]))
-        # kCS for each layer.
-        if self.add_ft_kCS:
-            for block in range(len(self.learn.model.block_config)):
-                for layer in range(self.learn.model.block_config[block]):
-                    kCS_list = self.learn.model.get_kCS_list_from_layer(
-                        block, layer)
-                    self.file.write(2*self.ft_comma + self.ft_comma.join(
-                        [str(kCS).replace(
-                            '.', self.ft_decimal) for kCS in kCS_list]))
-                if block != len(self.learn.model.block_config) - 1:
-                    self.file.write(self.ft_comma)
-        self.file.write('\n')
-        self.file.flush()
-        os.fsync(self.file.fileno())
-        self.old_logger(log)
-
-    def after_fit(self):
-        """
-        Close the file and clean up.
-        """
-        if hasattr(self, "gather_preds"):
-            return
-        self.file.close()
-        self.learn.logger = self.old_logger
-
-
 class SaveHypersCallback(Callback):
     """
     Saves certain hyperparameters to a given pickle file.
@@ -1836,8 +1758,10 @@ class SaveHypersCallback(Callback):
     Attributes:
         fname (str) - from args.
         values_dict (dict) - dictionnary containing values for some of the
-            DenseNet model's hyperparameters, namely growth_rate, block_config
-            (including each layer_config), update_growth_rate and bc_mode.
+            DenseNet model's hyperparameters, out of which the architecture may
+            be rebuilt. These parameters are: growth_rate (initial value),
+            block_config (including each layer_config), update_growth_rate,
+            bc_mode and reduction.
     """
     order = 80
 
@@ -1858,7 +1782,8 @@ class SaveHypersCallback(Callback):
                 self.model.features.named_modules() if (
                     'denseblock' in name and '.' not in name)],
             "update_growth_rate": self.model.update_growth_rate,
-            "bc_mode": self.model.bc_mode
+            "bc_mode": self.model.bc_mode,
+            "reduction": self.model.reduction
         }
         with open(self.fname, 'wb') as file:
             pickle.dump(self.values_dict, file)
@@ -1867,7 +1792,6 @@ class SaveHypersCallback(Callback):
         """
         Update the values_dict and save it to the file.
         """
-        self.values_dict["growth_rate"] = self.model.growth_rate
         self.values_dict["block_config"] = [
             module.layer_config for name, module in
             self.model.features.named_modules() if (
