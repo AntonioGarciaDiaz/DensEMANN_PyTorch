@@ -32,7 +32,8 @@ if __name__ == '__main__':
     parser.add_argument(
         '--source_experiment_id', '--source_id', default=None,
         dest='source_experiment_id', type=str,
-        help='Experiment ID for the existing model to load.')
+        help='Experiment ID for the existing model to load (default None, i.e.'
+             ' do not load a source experiment).')
     parser.add_argument(
         '--import-trainable-values-and-architecture',
         '--import-weights-and-architecture',
@@ -42,7 +43,8 @@ if __name__ == '__main__':
         '--import-trainable-values', '--import-weights',
         dest='import_weights', action='store_true',
         help='Import the weights and trainable values from the existing model'
-             ' (as specified in the model file) as well as the architecture.')
+             ' (as specified in the model file) as well as the architecture'
+             ' (default option).')
     parser.add_argument(
         '--import-only-architecture', '--import-only-hyperparameters',
         '--import-only-hypers', '--no-import-trainable-values',
@@ -58,7 +60,8 @@ if __name__ == '__main__':
     parser.add_argument(
         '--no-reuse-existing-files', '--no-reuse-files',
         dest='reuse_files', action='store_false',
-        help='Create new files, do not reuse files for existing model.')
+        help='Create new files, do not reuse files for existing model.'
+             ' (default option).')
     parser.set_defaults(reuse_files=False)
 
     # Paths for loading and saving data.
@@ -67,10 +70,16 @@ if __name__ == '__main__':
         help='Path to directory where data should be loaded from/downloaded'
              ' (default None, i.e. a new folder at the tempfile).')
     parser.add_argument(
+        '--load', dest='load', type=str, default=None,
+        help='Path to directory where a source model should be loaded from'
+             ' (default None, i.e. a \'ft-logs\' folder in the current working'
+             ' directory).')
+    parser.add_argument(
         '--save', dest='save', type=str, default=None,
         help='Path to directory where the model and ft-logs should be saved to'
              ' (default None, i.e. a \'ft-logs\' folder in the current working'
-             ' directory).')
+             ' directory). Is overwritten with the --load value if'
+             ' --reuse-existing-files.')
 
     # GENERAL EXECUTION PARAMETERS --------------------------------------------
     # -------------------------------------------------------------------------
@@ -118,11 +127,11 @@ if __name__ == '__main__':
        '--no-update-growth-rate-each-layer', '--no-update-growth-rate',
        '--no-update-k-each-layer', '--no-update-k',
        dest='update_growth_rate', action='store_false',
-       help='Do not update the DenseNet\'s default growth rate value.'
-            ' For DenseNet-BC, this arg also means that, when the model is'
-            ' created, the size of each bottleneck layer is always 4 x the'
-            ' specified growth_rate value.')
-    parser.set_defaults(update_growth_rate=True)
+       help='Do not update the DenseNet\'s default growth rate value'
+            ' (default option).  For DenseNet-BC, this arg also means that,'
+            ' when the model is created, the size of each bottleneck layer is'
+            ' always 4 x the specified growth_rate value.')
+    parser.set_defaults(update_growth_rate=False)
     parser.add_argument(
         '--keep_prob', '-kp', dest='keep_prob', type=float,
         help='Keep probability for dropout, if keep_prob = 1 dropout will be'
@@ -163,7 +172,8 @@ if __name__ == '__main__':
              ' This max value is used instead of the specified value if the'
              ' latter exceeds the former.')
     parser.add_argument(
-        '--validation_set_size', '--validation_size', '--valid_size',
+        '--validation_set_size', '--validation_size',
+        '--valid_set_size', '--valid_size',
         dest='valid_size', type=int,
         help='Size of the validation set, number of examples cut off the'
              ' original training set for validation'
@@ -221,7 +231,8 @@ if __name__ == '__main__':
         '--DensEMANN', '--self-construct', '--self-constr',
         dest='should_self_construct', action='store_true',
         help='Use the DensEMANN self-constructing algorithm to modify the'
-             ' network\'s initial architecture during training.')
+             ' network\'s initial architecture during training'
+             ' (default option).')
     parser.add_argument(
         '--prebuilt', '--no-self-construct', '--no-self-constr',
         dest='should_self_construct', action='store_false',
@@ -236,16 +247,15 @@ if __name__ == '__main__':
     parser.add_argument(
         '--no-pruning', '--no-prune', '--no-sparsification', '--no-sparsify',
         '--no-spars', dest='should_sparsify', action='store_false',
-        help='Do not run a scheduled sparsification on the network.')
+        help='Do not run a scheduled sparsification on the network'
+             ' (default option).')
     parser.set_defaults(should_sparsify=False)
     parser.add_argument(
         '--change-learning-rate', '--change-lr',
         dest='should_change_lr', action='store_true',
         help='Allow any modifications to the LR as defined in the training'
-             ' algorithm. When not using DensEMANN, the LR is scheduled to be'
-             ' multiplied by gamma (default 0.1) at specific epochs,'
-             ' corresponding to the milestones rlr_1 and rlr_2'
-             ' (default 0.5 and 0.75).')
+             ' algorithm (default option). When not using DensEMANN, the LR'
+             ' schedule is specified using the --prebuilt_rlr argument.')
     parser.add_argument(
         '--no-change-learning-rate', '--no-change-lr',
         dest='should_change_lr', action='store_false',
@@ -291,7 +301,8 @@ if __name__ == '__main__':
              ' self-construction process. If, at the end of DensEMANN, the'
              ' number of blocks in the network is lower than block_count,'
              ' a new block is created (with one layer and the DenseNet\'s'
-             ' current growth rate), and DensEMANN is executed again on it.')
+             ' current growth rate), and DensEMANN is executed again on it.'
+             ' (default=1).')
     parser.add_argument(
         '--layer_connection_strength', '--layer_cs', '-lcs', dest='layer_cs',
         type=str, choices=['relevance', 'spread'], default='relevance',
@@ -305,13 +316,14 @@ if __name__ == '__main__':
         dest='asc_thresh', type=int, default=10,
         help='Ascension threshold, used for self-constructing at layer level'
              ' in DensEMANN variants 0 to 3 and 7. Number of epochs before'
-             ' adding a new layer during the ascension stage.')
+             ' adding a new layer during the ascension stage. (default=10).')
     parser.add_argument(
         '--patience_parameter', '--patience_param', '-pp',
         dest='patience_param', type=int, default=200,
         help='Patience parameter, used for self-constructing at layer level'
              ' in DensEMANN variants 0 to 3. Number of epochs to wait before'
-             ' stopping the improvement stage, unless a new layer settles.')
+             ' stopping the improvement stage, unless a new layer settles.'
+             ' (default=200).')
     parser.add_argument(
         '--accuracy_std_tolerance', '--std_tolerance', '-stdt',
         dest='std_tolerance', type=float, default=0.1,
@@ -320,7 +332,7 @@ if __name__ == '__main__':
              ' Minimum standard deviation value for a window of previous'
              ' accuracy values in the ascension stage. If the St.D. of the'
              ' previous accuracies (std_window) goes below std_tolerance,'
-             ' the ascension stage ends.')
+             ' the ascension stage ends (default 0.1).')
     parser.add_argument(
         '--accuracy_std_window', '--acc_std_window', '--std_window', '-stdw',
         dest='std_window', type=int, default=50,
@@ -329,7 +341,7 @@ if __name__ == '__main__':
              ' Number of previous accuracy values that are taken into account'
              ' for deciding if the ascension stage should end'
              ' (this happens when the St.D. of these accuracy values is below'
-             ' std_tolerance).')
+             ' std_tolerance) (default 50).')
     parser.add_argument(
         '--accuracy_improvement_threshold', '--accuracy_impr_thresh',
         '--acc_improvement_threshold', '--acc_impr_thresh',
@@ -340,12 +352,12 @@ if __name__ == '__main__':
              ' difference between the accuracy after the completion of the'
              ' last and before-last layer during the improvement stage. If the'
              ' difference between the two accuracies is below the improvement'
-             ' threshold, the improvement stage ends.')
+             ' threshold, the improvement stage ends (default 0.01).')
     parser.add_argument(
         '--preserve-transition-each-layer', '--preserve-transition',
         dest='preserve_transition', action='store_true',
         help='Preserve parts of the previous final transition layer every time'
-             ' a layer is added (within the same block).')
+             ' a layer is added (within the same block) (default option).')
     parser.add_argument(
         '--new-transition-each-layer', '--new-transition',
         '--no-preserve-transition-each-layer', '--no-preserve-transition',
@@ -359,8 +371,8 @@ if __name__ == '__main__':
         dest='remove_last_layer', action='store_true',
         help='After building a dense block, undo its last layer\'s addition'
              ' (remove the last layer and reload the weight values before the'
-             ' layer was added). Implies should_save_model is set to true'
-             ' (via --saves).')
+             ' layer was added) (default option). Implies should_save_model is'
+             ' set to true (via --model-saves).')
     parser.add_argument(
         '--keep-last-layer-at-end', '--keep-last-layer',
         '--no-undo-last-layer-addition', '--no-undo-last-layer',
@@ -375,7 +387,8 @@ if __name__ == '__main__':
         '--expansion_rate', '-fex', type=int,
         default=1,  # by default, new filters are added one by one
         help='Expansion rate (rate at which new convolution filters are added'
-             ' together during the self-construction of a dense layer).')
+             ' together during the self-construction of a dense layer)'
+             ' (default 1).')
     parser.add_argument(
         '--derivate_filter_CS_smoothing', '--der_filter_CS_smoothing',
         '--der_kCS_smoothing', '--dkCS_smoothing',
@@ -383,8 +396,8 @@ if __name__ == '__main__':
         dest='dkCS_smoothing', type=int, default=10,
         help='Smoothing when calculating the derivate of each filter\'s kCS'
              ' (number of epochs to look back when calculating the slope).'
-             ' Used for self-constructing at filter level'
-             ' (to know which filters have settled).')
+             ' Used for self-constructing at filter level, to know which'
+             ' filters have settled (default 10).')
     parser.add_argument(
         '--derivate_filter_CS_std_window', '--der_filter_CS_std_window',
         '--der_kCS_std_window', '--dkCS_std_window',
@@ -392,8 +405,8 @@ if __name__ == '__main__':
         dest='dkCS_std_window', type=int, default=30,
         help='St.D. window for the for the derivate of each filter\'s kCS'
              ' (number of epochs to look back to calculate the St.D. of the'
-             ' kCS derivate). Used for self-constructing at filter level'
-             ' (to know which filters have settled).')
+             ' kCS derivate). Used for self-constructing at filter level,'
+             ' to know which filters have settled (default 30).')
     parser.add_argument(
         '--derivate_filter_CS_settling_threshold',
         '--derivate_filter_CS_stl_thresh',
@@ -403,8 +416,8 @@ if __name__ == '__main__':
         dest='dkCS_stl_thresh', type=float, default=0.001,
         help='Settling threshold for filter kCS derivates'
              ' (i.e. a value which means \'close to 0\' for them).'
-             ' Used for self-constructing at filter level'
-             ' (to know which filters have settled).')
+             ' Used for self-constructing at filter level, to know which'
+             ' filters have settled (default 0.001).')
     parser.add_argument(
         '--auto_usefulness_threshold', '--auto_usefulness_thresh', '-auto_uft',
         '--usefulness_threshold_auto', '--usefulness_thresh_auto', '-uft_auto',
@@ -416,7 +429,7 @@ if __name__ == '__main__':
              ' Used for automatically setting the usefulness threshold: after'
              ' k/2 filters have settled, it is found between the highest and'
              ' lowest kCS of settled filters at that fraction of the distance'
-             ' between them).')
+             ' between them (default 0.8).')
     parser.add_argument(
         '--auto_uselessness_threshold', '--auto_uselessness_thresh',
         '-auto_ult', '--uselessness_threshold_auto',
@@ -425,18 +438,18 @@ if __name__ == '__main__':
         dest='auto_uselessness_thresh', type=float, default=0.2,
         help='Uselessness threshold for filter CS (i.e. the kCS value below'
              ' which it is considered that the filter is NOT transmitting any'
-             ' \'useful\' information), expressed as a percentage.'
+             ' \'useful\' information), expressed as a percentage .'
              ' Used for automatically setting the uselessness threshold: after'
              ' k/2 filters have settled, it is found between the highest and'
              ' lowest kCS of settled filters at that fraction of the distance'
-             ' between them).')
+             ' between them (default 0.2).')
     parser.add_argument(
         '--micro_ascension_threshold', '--m_asc_thresh', '-mat',
         dest='m_asc_thresh', type=int, default=5,
         help='Micro-ascension threshold, used for self-constructing at filter'
              ' level in DensEMANN variants 4 onwards. Number of epochs before'
              ' adding a new filter during the micro-ascension stage, until a'
-             ' filter settles.')
+             ' filter settles (default 5).')
     parser.add_argument(
         '--micro_improvement_patience_parameter',
         '--m_improvement_patience_param',
@@ -446,7 +459,7 @@ if __name__ == '__main__':
         help='Micro-patience threshold, used for self-constructing at filter'
              ' level in DensEMANN variants 4 onwards. Number of epochs to wait'
              ' before stopping the micro-improvement stage, unless a new'
-             ' filter settles.')
+             ' filter settles (default 300).')
     parser.add_argument(
         '--filter-complementarity', '--complementarity',
         '--filter-compl', '--compl',
@@ -454,7 +467,8 @@ if __name__ == '__main__':
         help='Use a complementarity mechanism when adding new filters: the'
              ' sign configuration is the opposite of that of the filters with'
              ' lowest CS, unless that configuration already exists in the'
-             ' layer (in which case it must be differnet but close)')
+             ' layer (in which case it must be differnet but close)'
+             ' (default option).')
     parser.add_argument(
         '--filter-random-initialisation', '--random-initialisation',
         '--filter-random-init', '--random-init', '--filter-random',
@@ -478,7 +492,7 @@ if __name__ == '__main__':
              ' at filter level in DensEMANN variants 4 onwards. Number of'
              ' epochs to wait before terminating the micro-recovery stage'
              ' if pre-pruning accuracy (the usual condition for stopping this'
-             ' stage) cannot be reached.')
+             ' stage) cannot be reached (default 1000).')
 
     # PARAMETERS USED FOR PROCESSES NOT RRELATED TO DensEMANN -----------------
     # -------------------------------------------------------------------------
@@ -489,7 +503,7 @@ if __name__ == '__main__':
         dest='end_sparsity', type=float, default=50,
         help='Value between 0 and 100, corresponding to the percentage of the'
              ' trainable parameters that should be zeroed-out during scheduled'
-             ' sparsification.')
+             ' sparsification (default 50).')
     parser.add_argument(
         '--sparsifier_granularity', '--spars_granularity', '--granularity',
         dest='spars_granularity', type=str,
@@ -517,14 +531,16 @@ if __name__ == '__main__':
         choices=['one_shot', 'iterative', 'sched_agp', 'sched_onecycle',
                  'sched_dsd'], default='sched_agp',
         help='Schedule function for the sparsifier. Choice is between'
-             ' one_shot, iterative, sched_agp, sched_onecycle, and sched_dsd.'
+             ' one_shot, iterative, sched_agp (default), sched_onecycle,'
+             ' and sched_dsd.'
              ' N.B.: one_shot and iterative are meant to be used with a start'
              ' epoch, as they are not gradual pruning schedules. More info at:'
              ' https://nathanhubens.github.io/fasterai/schedules.html')
     parser.add_argument(
         '--sparsification_start_epoch', '--sparsifier_start_epoch',
         '--spars_start_epoch', dest='spars_start_epoch', type=int, default=0,
-        help='Training epoch at which the scheduled sparsification starts.')
+        help='Training epoch at which the scheduled sparsification starts'
+             ' (default 0).')
     parser.add_argument(
        '--sparsification_end_epoch', '--sparsifier_end_epoch',
        '--spars_end_epoch', dest='spars_end_epoch', type=int, default=None,
@@ -543,19 +559,20 @@ if __name__ == '__main__':
        dest='lth', action='store_false',
        help='Do not perform \'Lottery Ticket Hypothesis\'-style rewinding'
             ' after every pruning operation during the scheduled'
-            ' sparsification.')
+            ' sparsification (default option).')
     parser.set_defaults(lth=False)
     parser.add_argument(
        '--lth_rewind_epoch', '--lth_rewind', '--rewind_epoch',
        dest='lth_rewind_epoch', type=int, default=0,
-       help='Reference training epoch for LTH-style rewinding.')
+       help='Reference training epoch for LTH-style rewinding (default 0).')
 
     # Sparsification parameters that are specific to each schedule function.
     parser.add_argument(
         '--sparsification_iterative_n_steps', '--sparsifier_iterative_n_steps',
         '--spars_iterative_n_steps', '--iterative_n_steps',
         dest='spars_iterative_n_steps', type=int, default=3,
-        help='Number of steps for the iterative schedule function.')
+        help='Number of steps for the iterative schedule function'
+             ' (default 3).')
     parser.add_argument(
         '--sparsification_sched_onecycle_alpha',
         '--sparsifier_sched_onecycle_alpha', '--spars_sched_onecycle_alpha',
@@ -563,7 +580,8 @@ if __name__ == '__main__':
         '--sparsification_onecycle_alpha', '--sparsifier_onecycle_alpha',
         '--spars_onecycle_alpha', '--onecycle_alpha',
         dest='spars_sched_onecycle_alpha', type=float, default=14,
-        help='Alpha value for the sched_onecycle schedule function.')
+        help='Alpha value for the sched_onecycle schedule function'
+             ' (default 14).')
     parser.add_argument(
         '--sparsification_sched_onecycle_beta',
         '--sparsifier_sched_onecycle_beta', '--spars_sched_onecycle_beta',
@@ -571,7 +589,8 @@ if __name__ == '__main__':
         '--sparsification_onecycle_beta', '--sparsifier_onecycle_beta',
         '--spars_onecycle_beta', '--onecycle_beta',
         dest='spars_sched_onecycle_beta', type=float, default=6,
-        help='Beta value for the sched_onecycle schedule function.')
+        help='Beta value for the sched_onecycle schedule function'
+             ' (default 6).')
     parser.add_argument(
         '--sparsification_sched_dsd_middle', '--sparsifier_sched_dsd_middle',
         '--spars_sched_dsd_middle', '--sched_dsd_middle',
@@ -582,6 +601,42 @@ if __name__ == '__main__':
              ' sched_dsd schedule function. If None (default), the percentage'
              ' corresponds to halfway between the specified end sparsity and'
              ' 100% (full zero-out).')
+    parser.add_argument(
+        '--sparsification_sched_dsd_pattern', '--sparsifier_sched_dsd_pattern',
+        '--spars_sched_dsd_pattern', '--sched_dsd_pattern',
+        '--sparsification_dsd_pattern', '--sparsifier_dsd_pattern',
+        '--spars_dsd_pattern', '--dsd_pattern',
+        dest='spars_sched_dsd_pattern', type=str,
+        choices=['square', 'lin', 'triangle', 'cos', 'sine', 'poly', 'agp',
+                 'poly_wave', 'agp_wave', 'onecycle'],
+        default='cos',
+        help='Pattern of the pruning and unpruning motion for the sched_dsd'
+             ' schedule function. The choice is between \'square\' i.e. a'
+             ' square wave function, \'lin\' or \'triangle\' i.e. a linear or'
+             ' triangle wave function, \'cos\' or \'sine\' (default) i.e. a'
+             ' (co)sine wave function, functions based on the \'poly\' LR'
+             ' schedule and the \'agp\' and \'onecycle\' pruning schedules,'
+             ' and \'poly_wave\' and \'agp_wave\' adaptations as periodic'
+             ' wave functions.')
+    parser.add_argument(
+        '--sparsification_sched_dsd_iterations',
+        '--sparsifier_sched_dsd_iterations',
+        '--spars_sched_dsd_iterations', '--sched_dsd_iterations',
+        '--sparsification_dsd_iterations', '--sparsifier_dsd_iterations',
+        '--spars_dsd_iterations', '--dsd_iterations',
+        dest='spars_sched_dsd_iterations', type=int, default=1,
+        help='Number of pruning and unpruning iterations for the sched_dsd'
+             ' schedule function (default 1).')
+    parser.add_argument(
+        '--sparsification_sched_dsd_middle_pos',
+        '--sparsifier_sched_dsd_middle_pos',
+        '--spars_sched_dsd_middle_pos', '--sched_dsd_middle_pos',
+        '--sparsification_dsd_middle_pos', '--sparsifier_dsd_middle_pos',
+        '--spars_dsd_middle_pos', '--dsd_middle_pos',
+        dest='spars_sched_dsd_middle_pos', type=float, default=0.5,
+        help='Relative position (between 0 and 1) corresponding to \'the'
+             ' middle of the pruning\' for the sched_dsd schedule function'
+             ' (i.e. where sparsity = spars_sched_dsd_middle) (default 0.5).')
 
     # Learning rate reduction schedules (mostly used for prebuilt networks).
     parser.add_argument(
@@ -619,25 +674,29 @@ if __name__ == '__main__':
     parser.add_argument(
         '--standard-init', dest='DensEMANN_init', action='store_false',
         help='Do not use the DensEMANN initialization method for prebuilt'
-             ' DenseNets.')
-    parser.set_defaults(DensEMANN_init=True)
+             ' DenseNets (default option).')
+    parser.set_defaults(DensEMANN_init=False)
 
     # LOGS AND SAVES RELATED PARAMETERS ---------------------------------------
     # -------------------------------------------------------------------------
 
     # Whether or not to save the model's state (to load it back in the future).
     parser.add_argument(
-        '--saves', dest='should_save_model', action='store_true',
-        help='Save the model (and relevant hyperparameters) during training.')
+        '--model-saves', '--saves',
+        dest='should_save_model', action='store_true',
+        help='Save the model (and relevant hyperparameters) during training'
+             ' (default option).')
     parser.add_argument(
-        '--no-saves', dest='should_save_model', action='store_false',
+        '--no-model-saves', '--no-saves',
+        dest='should_save_model', action='store_false',
         help='Do not save the model or its hyperparameters during training.')
     parser.set_defaults(should_save_model=True)
     # Wether or not to write CSV feature logs.
     parser.add_argument(
         '--feature-logs', '--ft-logs', '--logs',
         dest='should_save_ft_logs', action='store_true',
-        help='Record the evolution of feature values in a CSV feature log.')
+        help='Record the evolution of feature values in a CSV feature log'
+             ' (default option).')
     parser.add_argument(
         '--no-feature-logs', '--no-ft-logs', '--no-logs',
         dest='should_save_ft_logs', action='store_false',
@@ -657,8 +716,8 @@ if __name__ == '__main__':
         '--no-save-model-every-epoch', '--no-save-every-epoch',
         '--no-every-epoch',
         dest='save_model_every_epoch', action='store_false',
-        help='Save the model only when there is an improvement in the'
-             ' validation loss, or when DensEMANN requires it.'
+        help='Save the model only when the validation loss improves, or'
+             ' whenever DensEMANN requires it (default option).'
              ' N.B.: This is only functional when a validation set is used'
              ' (i.e. when valid_size is not set to 0).')
     parser.set_defaults(save_model_every_epoch=False)
@@ -679,14 +738,15 @@ if __name__ == '__main__':
         dest='keep_intermediary_model_saves', action='store_true',
         help='Keep intermediary model saves after using DensEMANN'
              ' (i.e. before pruning, before the last layer addition).'
-             ' Implies should_save_model is set to true (via --saves).')
+             ' Implies should_save_model is set to true (via --model-saves).')
     parser.add_argument(
         '--no-keep-intermediary-model-saves', '--no-keep-intermediary-saves',
         '--no-intermediary-model-saves', '--no-intermediary-saves',
         dest='keep_intermediary_model_saves', action='store_false',
         help='Do not keep intermediary model saves after using DensEMANN.'
              ' This means that, if should_save_model is set to true, such'
-             ' intermediary saves are deleted after running the algorithm.')
+             ' intermediary saves are deleted after running the algorithm'
+             ' (default option).')
     parser.set_defaults(keep_intermediary_model_saves=False)
 
     # Parameters related to feature logs.
@@ -711,8 +771,8 @@ if __name__ == '__main__':
     parser.add_argument(
         '--add-feature-kCS', '--add-ft-kCS', '--feature-kCS', '--ft-kCS',
         dest='add_ft_kCS', action='store_true',
-        help='Save kCS values from filters in each layer'
-             ' (i.e. the CS for each filter) to the CSV feature log.')
+        help='Save kCS values from filters in each layer (i.e. the CS for each'
+             ' filter) to the CSV feature log (default option).')
     parser.add_argument(
         '--no-add-feature-kCS', '--no-add-ft-kCS',
         '--no-feature-kCS', '--no-ft-kCS',
@@ -728,24 +788,24 @@ if __name__ == '__main__':
             args.keep_prob = 0.8
         else:
             args.keep_prob = 1.0
-    if not args.train_size:
-        if args.dataset in ['SVHN', 'SVHN+']:
-            args.train_size = 6000
-        elif args.dataset in ['FMIST', 'FMIST+']:
-            args.train_size = 54000
-        elif args.dataset in ['FER2013', 'FER2013+']:
-            args.train_size = 29068
-        else:
-            args.train_size = 45000
-    if not args.valid_size:
+    if args.valid_size is None:
         if args.dataset in ['SVHN', 'SVHN+']:
             args.valid_size = 6000
-        elif args.dataset in ['FMIST', 'FMIST+']:
+        elif args.dataset in ['FMNIST', 'FMNIST+']:
             args.valid_size = 6000
         elif args.dataset in ['FER2013', 'FER2013+']:
             args.valid_size = 3230
-        else:
+        else:  # C10, C10+, C100 and C100+
             args.valid_size = 5000
+    if not args.train_size:
+        if args.dataset in ['SVHN', 'SVHN+']:
+            args.train_size = 6000
+        elif args.dataset in ['FMNIST', 'FMNIST+']:
+            args.train_size = 54000 if args.valid_size else 60000
+        elif args.dataset in ['FER2013', 'FER2013+']:
+            args.train_size = 29068 if args.valid_size else 32298
+        else:  # C10, C10+, C100 and C100+
+            args.train_size = 45000 if args.valid_size else 50000
     if args.model_type == 'DenseNet':
         args.reduction = 1.0
 

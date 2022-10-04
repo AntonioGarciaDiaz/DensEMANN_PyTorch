@@ -1754,6 +1754,8 @@ class SaveHypersCallback(Callback):
     Args:
         fname (str) - the name of the file where hyperparameters are saved
             (default 'hypers.pkl').
+        source_fname (str or None) - an optional source file from which
+            hyperparameters can be loaded (default None).
 
     Attributes:
         fname (str) - from args.
@@ -1765,26 +1767,31 @@ class SaveHypersCallback(Callback):
     """
     order = 80
 
-    def __init__(self, fname='hypers.pkl'):
+    def __init__(self, fname='hypers.pkl', source_fname=None):
         """
         Initializer for the SaveHypersCallback.
         """
         self.fname = fname
+        self.source_fname = source_fname
 
     def before_fit(self):
         """
         Initialise the values_dict and save it to the file.
         """
-        self.values_dict = {
-            "growth_rate": self.model.growth_rate,
-            "block_config": [
-                module.layer_config for name, module in
-                self.model.features.named_modules() if (
-                    'denseblock' in name and '.' not in name)],
-            "update_growth_rate": self.model.update_growth_rate,
-            "bc_mode": self.model.bc_mode,
-            "reduction": self.model.reduction
-        }
+        if self.source_fname is not None:
+            with open(self.source_fname, 'rb') as file:
+                self.values_dict = pickle.load(file)
+        else:
+            self.values_dict = {
+                "growth_rate": self.model.growth_rate,
+                "block_config": [
+                    module.layer_config for name, module in
+                    self.model.features.named_modules() if (
+                        'denseblock' in name and '.' not in name)],
+                "update_growth_rate": self.model.update_growth_rate,
+                "bc_mode": self.model.bc_mode,
+                "reduction": self.model.reduction
+            }
         with open(self.fname, 'wb') as file:
             pickle.dump(self.values_dict, file)
 

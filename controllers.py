@@ -17,95 +17,14 @@ from collections import deque
 from datetime import timedelta, datetime
 from fastai.vision.all import *
 from fasterai.sparse.all import *
-from PIL import Image
 from torch.utils.data import DataLoader, Subset, ConcatDataset
 from torchvision import datasets, transforms
-from torchvision.datasets.vision import VisionDataset
-from typing import Callable, Optional
+
 from callbacks import *
+from datasets import *
 from modded_callbacks import *
 from models import DenseNet
-
-
-def sched_dsd(start, end, pos, middle=None):
-    """
-    Pruning schedule inspired on Dense-Sparse-Dense: prunes to middle % of the
-    features, then unprunes to end %, following a cosine-shaped pattern.
-    DSD original paper (Han et al, 2016): https://arxiv.org/pdf/1607.04381.pdf
-    Implementation based on the Fasterai tutorial at:
-    https://nathanhubens.github.io/fasterai/schedules.html#Dense-Sparse-Dense
-
-    Args:
-        start (int or float) - percentage corresponding to the network's
-            initial sparsity.
-        end (int or float) - percentage corresponding to the network's
-            final sparsity.
-        pos (float) - relative position within the pruning schedule.
-        middle (int or float or None) - percentage corresponding to the
-            network's sparsity at the middle of the pruning (should be lower
-            than both start and end), if None (default) corresponds to halfway
-            between end and 100%.
-    """
-    if middle is None:
-        middle = end + (100-end)/2
-    if pos < 0.5:
-        return start + (1 + math.cos(math.pi*(1-pos*2))) * (middle-start) / 2
-    else:
-        return middle + (1 - math.cos(math.pi*(1-pos*2))) * (end-middle) / 2
-
-
-class FER2013(VisionDataset):
-    """
-    Class for the FER-2013 dataset.
-    Based on PyTorch MNIST dataset:
-    https://pytorch.org/vision/stable/_modules/torchvision/datasets/mnist.html
-    The below Kaggle notebook by Balmukund was helpful when adapting the
-    original PyTorch MNIST dataset code:
-    https://www.kaggle.com/balmukund/fer-2013-pytorch-implementation
-
-    Args:
-        root (string) - root directory for source data.
-        split (string) - split of the data to be used: Training, PrivateTest,
-            or PublicTest (default Training)
-        transform (callable, optional) - transform for image data.
-        target_transform (callable, optional) - transform for target data.
-    """
-    def __init__(self, root: str, split: str = "Training",
-                 transform: Optional[Callable] = None,
-                 target_transform: Optional[Callable] = None) -> None:
-        """
-        Initializer for the FER2013 class.
-        """
-        super(FER2013, self).__init__(
-            root, transform=transform, target_transform=target_transform)
-        data = pd.read_csv(os.path.join(root, "fer2013.csv"))
-        data = data[data["Usage"] == split]
-        self.data = [[int(y) for y in x.split()] for x in data["pixels"]]
-        self.targets = [t for t in data["emotion"]]
-
-    def __len__(self):
-        """
-        Returns the total number of samples.
-        """
-        return len(self.data)
-
-    def __getitem__(self, index):
-        """
-        Generates one sample of data.
-
-        Args:
-            index (int) - index of the data sample.
-        """
-        # Get image and target class.
-        img, target = self.data[index], int(self.targets[index])
-        img = Image.fromarray(np.array(img).reshape(48, 48), mode='L')
-        # Apply transforms
-        if self.transform is not None:
-            img = self.transform(img)
-        if self.target_transform is not None:
-            target = self.target_transform(target)
-        # Return.
-        return img, target
+from schedules import sched_dsd, sched_dsd_original
 
 
 class DensEMANN_controller(object):
@@ -130,6 +49,9 @@ class DensEMANN_controller(object):
 
         data (str or None) - path to directory where data should be loaded
             from/downloaded (default None, i.e. a new folder at the tempfile).
+        load (str or None) - path to directory where a model should optionally
+            be loaded from (default None, i.e. a 'ft-logs' folder in the
+            current working directory).
         save (str or None) - path to directory where the model and ft-logs
             should be saved to (default None, i.e. a 'ft-logs' folder in the
             current working directory).
@@ -267,6 +189,12 @@ class DensEMANN_controller(object):
         spars_sched_dsd_middle (float or None) - mid-pruning sparsity
             percentage for the sched_dsd schedule function
             (default None, i.e. halfway between end_sparsity and 100).
+        spars_sched_dsd_pattern (str) - the pattern for the pruning and
+            unpruning in the sched_dsd schedule function (default 'cos').
+        spars_sched_dsd_iterations (int) - the number of pruning and
+            unpruning in the sched_dsd schedule function (default 'cos').
+        spars_sched_dsd_middle_pos (float) - relative position corresponding to
+            mid-pruning for the sched_dsd schedule function (default 0.5).
 
         rlr_start_epoch (int) - training epoch at which the scheduled learning
             rate modification starts, relative to the epoch in which it is
@@ -313,6 +241,7 @@ class DensEMANN_controller(object):
         should_train (bool) - 'train' from args.
         should_test (bool) - 'test' from args.
         data (str) - from args (or the default folder if None in args).
+        load (str) - from args (or the default folder if None in args).
         save (str) - from args (or the default folder if None in args).
         growth_rate (int) - from args.
         block_config (list of int or list of list of int) - the block
@@ -378,6 +307,7 @@ class DensEMANN_controller(object):
         ft_decimal (str) - from args.
         add_ft_kCS (bool) - from args.
 
+        source_experiment_id (str or None) - from args.
         experiment_id (str) - a string that identifies the current execution,
             used in file names for the model, feature logs, etc. (format:
             [model_type]_[dataset]_DensEMANN_[var]_[rlr]_[update_k]_[date] for
@@ -397,7 +327,7 @@ class DensEMANN_controller(object):
     """
     def __init__(self, train=True, test=True,
                  source_experiment_id=None, import_weights=True,
-                 reuse_files=False, data=None, save=None,
+                 reuse_files=False, data=None, load=None, save=None,
                  growth_rate=12, layer_num_list='1', filter_num_list=None,
                  update_growth_rate=True, keep_prob=1.0,
                  model_type='DenseNet-BC', dataset='C10+', reduction=0.5,
@@ -423,6 +353,8 @@ class DensEMANN_controller(object):
                  lth=False, lth_rewind_epoch=0,
                  spars_iterative_n_steps=3, spars_sched_onecycle_alpha=14,
                  spars_sched_onecycle_beta=6, spars_sched_dsd_middle=None,
+                 spars_sched_dsd_pattern='cos', spars_sched_dsd_iterations=1,
+                 spars_sched_dsd_middle_pos=0.5,
                  rlr_start_epoch=0, rlr_end_epoch=None,
                  prebuilt_rlr='DensEMANN', DensEMANN_init=True,
                  should_save_model=True, should_save_ft_logs=True,
@@ -437,6 +369,7 @@ class DensEMANN_controller(object):
                 implemented. Implemented DensEMANN variants: [4, 5, 6, 7].
             Exception: dataset 'DATASET' not yet supported.
                 Supported datasets: [C10, C100, SVHN, FMNIST, FER2013].
+            Exception: 'load' is not a dir.
             Exception: 'save' is not a dir.
             Exception: source hyperparameters for 'source_experiment_id' not
                 found at dir 'save'. Please provide a valid experiment ID.
@@ -481,16 +414,21 @@ class DensEMANN_controller(object):
             raise Exception(('dataset \'%s\' not yet supported. ' +
                             'Supported datasets: %s.') % (
                                 dataset_name, str(supported_datasets.keys())))
-        # Handle data and save directories.
+        # Handle data, load and save directories.
         self.data = data
+        self.load = load
         self.save = save
-        # Handle cases where data, save directories are not given or relative.
+        # Handle cases where these directories are not given or relative.
         if data is None:
             self.data = os.path.join(tempfile.gettempdir(), dataset_name)
         elif data.startswith("./"):
             self.data = os.path.join(os.getcwd(), data[2:], dataset_name)
         else:
             self.data = os.path.join(data, dataset_name)
+        if load is None:
+            self.load = os.path.join(os.getcwd(), "ft-logs")
+        elif load.startswith("./"):
+            self.load = os.path.join(os.getcwd(), load[2:])
         if save is None:
             self.save = os.path.join(os.getcwd(), "ft-logs")
         elif save.startswith("./"):
@@ -498,6 +436,9 @@ class DensEMANN_controller(object):
         # Create the save directory for the model (if it doesn't exist yet).
         if not os.path.exists(self.save):
             os.makedirs(self.save)
+        # Check if the load and save directories exist.
+        if source_experiment_id is not None and not os.path.isdir(self.load):
+            raise Exception('%s is not a dir.' % self.load)
         if not os.path.isdir(self.save):
             raise Exception('%s is not a dir.' % self.save)
 
@@ -570,7 +511,14 @@ class DensEMANN_controller(object):
                     β=spars_sched_onecycle_beta)
             elif spars_sched_func == 'sched_dsd':
                 true_spars_sched_func = lambda start, end, pos: sched_dsd(
-                    start, end, pos, middle=spars_sched_dsd_middle)
+                    start, end, pos, middle=spars_sched_dsd_middle,
+                    pattern=spars_sched_dsd_pattern,
+                    iterations=spars_sched_dsd_iterations,
+                    middle_pos=spars_sched_dsd_middle_pos)
+            # elif spars_sched_func == 'sched_dsd_original':
+            #     true_spars_sched_func = lambda start, end, pos:
+            #         sched_dsd_original(start, end, pos,
+            #                            middle=spars_sched_dsd_middle)
             self.sparsifier_kwargs = {
                 "end_sparsity": end_sparsity, "granularity": spars_granularity,
                 "method": spars_method, "sched_func": true_spars_sched_func,
@@ -581,7 +529,7 @@ class DensEMANN_controller(object):
         self.prebuilt_rlr = prebuilt_rlr
         self.should_save_model = should_save_model
         self.should_save_ft_logs = should_save_ft_logs
-        self.save_model_every_epoch = (valid_size and (
+        self.save_model_every_epoch = bool(valid_size and (
             save_model_every_epoch or every_epoch_until is not None))
         self.every_epoch_until = every_epoch_until
         self.remove_intermediary_model_saves = (
@@ -592,24 +540,25 @@ class DensEMANN_controller(object):
         self.add_ft_kCS = add_ft_kCS
 
         # If source ID is specified.
+        self.source_experiment_id = source_experiment_id
         if source_experiment_id is not None:
             # Check if the hypers file exists.
             if not os.path.isfile(os.path.join(
-                    self.save, source_experiment_id + '_hypers.pkl')):
+                    self.load, source_experiment_id + '_hypers.pkl')):
                 raise Exception(
                     ('source hyperparameters for %s not found at dir %s.'
                      + ' Please provide a valid experiment ID.')
-                    % (source_experiment_id + '_hypers.pkl', self.save))
+                    % (source_experiment_id + '_hypers.pkl', self.load))
             # Also, if source model should be used, check if it exists.
             if import_weights is not None and not os.path.isfile(os.path.join(
-                    self.save, source_experiment_id + '_model.pth')):
+                    self.load, source_experiment_id + '_model.pth')):
                 raise Exception(
                     ('source model for %s not found at dir %s.'
                      + ' Please provide a valid experiment ID.')
-                    % (source_experiment_id + '_model.pth', self.save))
+                    % (source_experiment_id + '_model.pth', self.load))
             # Copy some hyperparameters from source file.
             with open(os.path.join(
-                    self.save, source_experiment_id + '_hypers.pkl'), 'rb'
+                    self.load, source_experiment_id + '_hypers.pkl'), 'rb'
                     ) as file:
                 values_dict = pickle.load(file)
                 self.growth_rate = values_dict["growth_rate"]
@@ -620,6 +569,8 @@ class DensEMANN_controller(object):
         # Set identifier for the experiment (depends on source model).
         if reuse_files and source_experiment_id is not None:
             self.experiment_id = source_experiment_id
+            # In this case, the save and load directories should be the same.
+            self.save = self.load
             # Also specify in the ft-logs that the model was reloaded.
             if self.should_save_ft_logs:
                 with open(os.path.join(
@@ -786,7 +737,7 @@ class DensEMANN_controller(object):
         # Load model state from existing source file if specified.
         if source_experiment_id is not None and import_weights:
             self.model.load_state_dict(torch.load(os.path.join(
-                self.save, source_experiment_id + '_model.pth')), strict=False)
+                self.load, source_experiment_id + '_model.pth')), strict=False)
 
         # Calculate and print the total number of parameters in the model.
         num_params = sum(p.numel() for p in self.model.parameters())
@@ -911,7 +862,10 @@ class DensEMANN_controller(object):
                 every_epoch=self.ft_freq*int(self.save_model_every_epoch),
                 every_epoch_until=self.every_epoch_until))
             cbs.append(SaveHypersCallback(fname=os.path.join(
-                self.save, self.experiment_id + '_hypers.pkl')))
+                self.save, self.experiment_id + '_hypers.pkl'),
+                source_fname=os.path.join(
+                    self.load, self.source_experiment_id + '_hypers.pkl')
+                if self.source_experiment_id is not None else None))
         # If saving ft-logs, create the callback to write the ft-log file.
         if self.should_save_ft_logs:
             cbs.append(CustomCSVLogger(fname=os.path.join(
@@ -922,22 +876,27 @@ class DensEMANN_controller(object):
         # Create the Learner from the model, optimizer and callbacks.
         learn = Learner(dls, self.model, lr=self.lr,
                         loss_func=nn.CrossEntropyLoss(),
-                        opt_func=opt_func, metrics=[accuracy], cbs=cbs)
+                        opt_func=opt_func, metrics=[
+                            accuracy])
+        # F1Score(average=None), Precision(average=None), Recall(average=None)])
+        # RocAuc(average=None, multi_class='ovo')])
 
         # TRAINING THE MODEL --------------------------------------------------
         # ---------------------------------------------------------------------
 
         if self.should_train:
             # Begin counting total training time.
-            total_start_time = time.time()
+            train_start_time = [time.perf_counter(), time.process_time()]
             # Training loop.
             learn.fit(self.lim_n_epochs if self.should_self_construct and (
-                self.self_constructing_var >= 2) else self.n_epochs)
+                self.self_constructing_var >= 2) else self.n_epochs, cbs=cbs)
             # Measure total training time.
-            total_training_time = time.time() - total_start_time
+            train_time = [time.perf_counter() - train_start_time[0],
+                          time.process_time() - train_start_time[1]]
             print("\nTRAINING COMPLETE!\n")
-            print("TOTAL TRAINING TIME: %s\n" % str(timedelta(
-                seconds=total_training_time)))
+            print("TOTAL TRAINING TIME:\n- WALL:\t{}\n- CPU:\t{}\n".format(
+                str(timedelta(seconds=train_time[0])),
+                str(timedelta(seconds=train_time[1]))))
             # If DensEMANN was used, print the final architecture.
             if self.should_self_construct:
                 total_par, cv_par, fc_par = self.model.count_trainable_params()
@@ -971,21 +930,33 @@ class DensEMANN_controller(object):
 
         if self.should_test:
             # Begin counting testing time.
-            test_start_time = time.time()
+            test_start_time = [time.perf_counter(), time.process_time()]
             # Test on the test set and get results.
-            preds, y, losses = learn.get_preds(dl=test_loader, with_loss=True)
-            test_time = time.time() - test_start_time
-            test_accuracy = float(accuracy(preds, y))
-            test_loss = np.mean(losses.tolist())
+            # preds, y, losses = learn.get_preds(dl=test_loader,with_loss=True)
+            res = learn.validate(dl=test_loader, ds_idx=2)
+            test_time = [time.perf_counter() - test_start_time[0],
+                         time.process_time() - test_start_time[1]]
+            # test_loss = np.mean(losses.tolist())
+            # test_accuracy = float(accuracy(preds, y))
+            test_loss = res[0]
+            test_accuracy = res[1]
+            # test_F1 = str(res[2].tolist()).replace(',', ' ')
+            # test_Precision = str(res[3].tolist()).replace(',', ' ')
+            # test_Recall = str(res[4].tolist()).replace(',', ' ')
+            # test_RocAuc = str(res[5].tolist()).replace(',', ' ')
             print("Test:\taccuracy = %f\tloss = %f" % (
                 test_accuracy, test_loss))
             # If specified, save relevant data to ft-logs.
             if self.should_save_ft_logs:
+
                 with open(os.path.join(
                         self.save, self.experiment_id + '_ft_log.csv'),
                         'a') as f:
-                    to_write = ('test{0}{0}{1:0.5f}{0}{2:0.5f}{0}').format(
-                        self.ft_comma, test_loss, test_accuracy)
+                    to_write = ('test{0}{0}{1:0.5f}{0}{2:0.5f}{0}'
+                                # '{3}{0}{4}{0}{5}{0}{6}{0}'
+                                ).format(
+                                    self.ft_comma, test_loss, test_accuracy)
+                    # test_F1, test_Precision, test_Recall, test_RocAuc)
                     f.write(to_write.replace('.', self.ft_decimal))
                     if self.add_ft_kCS:
                         for block in range(len(self.model.block_config)):
@@ -1007,11 +978,15 @@ class DensEMANN_controller(object):
             write_at_end = '\n'
             # Print training and test time.
             if self.should_train:
-                write_at_end += 'training time{0}{1}\n'.format(
-                    self.ft_comma, str(timedelta(seconds=total_training_time)))
+                write_at_end += 'training wall time{0}{1}\n'.format(
+                    self.ft_comma, str(timedelta(seconds=train_time[0])))
+                write_at_end += 'training CPU time{0}{1}\n'.format(
+                    self.ft_comma, str(timedelta(seconds=train_time[1])))
             if self.should_test:
-                write_at_end += 'test time{0}{1}\n\n'.format(
-                    self.ft_comma, str(timedelta(seconds=test_time)))
+                write_at_end += 'test wall time{0}{1}\n'.format(
+                    self.ft_comma, str(timedelta(seconds=test_time[0])))
+                write_at_end += 'test CPU time{0}{1}\n'.format(
+                    self.ft_comma, str(timedelta(seconds=test_time[1])))
             # If DensEMANN was used, print the final architecture.
             if self.should_self_construct:
                 write_at_end += (

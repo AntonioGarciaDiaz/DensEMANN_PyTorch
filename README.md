@@ -103,7 +103,7 @@ The network retains the weights for which it obtained the best validation set lo
 --sparsify  --granularity filter --spars_sched_func sched_dsd --spars_end_epoch 300 --rlr_start_epoch 300 --every_epoch_until 300
 --end_sparsity 70``
 
-Here the program trains the same DenseNet-BC from above, but it also adds some sparsification.
+Here the program trains the same DenseNet-BC as above, but it also adds some sparsification.
 The sparsification takes place during the first 300 epochs: it is at the granularity of filters, with a target percentage of 70%,
 and it follows a custom schedule based on the principles of [Dense-Sparse-Dense training (Han et al, 2016)](https://arxiv.org/pdf/1607.04381.pdf)
 The last 600 epochs are for normal training. The same LR reduction schedule from above is used.
