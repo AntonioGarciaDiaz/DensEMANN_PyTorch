@@ -24,8 +24,8 @@ class DensEMANNCallback(Callback):
     Callback for executing the DensEMANN self-construction algorithm.
 
     Args:
-        self_constructing_var (int) - the variant of the self-construction
-            algorithm to be used (default is the latest variant).
+        self_constructing_var (int) - the DensEMANN variant to be used
+            (default is the latest variant).
         should_change_lr (bool) - whether or not the learning rate will be
             modified during training (default True).
         should_save_model (bool) - whether or not to save the model and
@@ -34,7 +34,7 @@ class DensEMANNCallback(Callback):
             (default True).
         **kwargs (dict) - contains various optional arguments, all from the
             DensEMANN_controller initializer, that are copied as attributes:
-            block_count, layer_cs, asc_thresh, patience_param,
+            block_count, new_block_mode, layer_cs, asc_thresh, patience_param,
             std_tolerance, std_window, impr_thresh, preserve_transition,
             remove_last_layer, expansion_rate, dkCS_smoothing, dkCS_std_window,
             dkCS_stl_thresh, auto_usefulness_thresh, auto_uselessness_thresh,
@@ -207,13 +207,13 @@ class DensEMANNCallback(Callback):
                 should correspond to the epoch in which the ascension stage
                 began, but may be set manually here (default 0).
         """
-        self.expected_end = self.patience_param
+        self.expected_end = self.patience_param + asc_ref_epoch
         self.set_algorithm_stage(algorithm_stage=0)
         self.settled_layers_ceil = 0  # highest num of settled layers yet
         self.asc_ref_epoch = asc_ref_epoch
         self.patience_cntdwn = self.patience_param
         if self.has_micro_algo:
-            self.expected_end = self.m_patience_param
+            self.expected_end = self.m_patience_param + asc_ref_epoch
             self.set_algorithm_stage(micro_stage=0)
             self.useful_filters_ceil = 0  # highest num of useful filters yet
             self.m_patience_cntdwn = self.m_patience_param
@@ -747,7 +747,7 @@ class DensEMANNCallback(Callback):
 
     def self_constructing_var5(self, epoch, accuracy):
         """
-        A step of DensEMANN variant #5 for one training epoch.
+        A step of DensEMANN variant #5 (v1.0) for one training epoch.
         Builds new layers in the last block depending on parameters.
         Returns True if training should continue, False otherwise.
 
@@ -902,10 +902,10 @@ class DensEMANNCallback(Callback):
                 if self.m_patience_cntdwn <= 0 and (
                         accuracy >= self.accuracy_pre_pruning):
                     # prune again if there are useless filters, else continue
-                    # but first, wait for all filters to settle
-                    if len(useless_filters_list) >= 1 and (
-                            settled_filters_count == len(self.kCS_FIFO)):
-                        self.set_algorithm_stage(micro_stage=2)
+                    if len(useless_filters_list) >= 1:
+                        # but first, wait for all filters to settle
+                        if settled_filters_count == len(self.kCS_FIFO):
+                            self.set_algorithm_stage(micro_stage=2)
                     else:
                         if self.should_change_lr:
                             self.reduce_lr_callback.deactivation_switch()
@@ -992,7 +992,7 @@ class DensEMANNCallback(Callback):
 
     def self_constructing_var6(self, epoch, accuracy):
         """
-        A step of DensEMANN variant #6 for one training epoch.
+        A step of DensEMANN variant #6 (v1.1) for one training epoch.
         Builds new layers in the last block depending on parameters.
         Returns True if training should continue, False otherwise.
 
@@ -1018,7 +1018,7 @@ class DensEMANNCallback(Callback):
               (optionally after resetting the learning rate to its initial
               value and reducing it according to rlr0), wait until reaching
               pre-pruning accuracy; then if there are any new useless filters
-              wait for all filters to settle and return to pruning, else end
+              and all filters have settled, return to pruning, else end
               the stage.
 
         Args:
@@ -1147,8 +1147,8 @@ class DensEMANNCallback(Callback):
                         self.reduce_lr_callback.gamma *
                         self.reduce_lr_callback.gamma))
                 if can_end and accuracy >= self.accuracy_pre_pruning:
-                    # prune again if there are useless filters, else continue
-                    # but first, wait for all filters to settle
+                    # prune again if there are useless filters
+                    # AND all filters have settled, else continue
                     if len(useless_filters_list) >= 1 and (
                             len(settled_filters_list) == len(self.kCS_FIFO)):
                         self.set_algorithm_stage(micro_stage=2)
@@ -1237,7 +1237,7 @@ class DensEMANNCallback(Callback):
 
     def self_constructing_var7(self, epoch, accuracy):
         """
-        A step of DensEMANN variant #7 for one training epoch.
+        A step of DensEMANN variant #7 (v1.2) for one training epoch.
         Builds new layers in the last block depending on parameters.
         Returns True if training should continue, False otherwise.
 
@@ -1250,10 +1250,12 @@ class DensEMANNCallback(Callback):
             then check if the accuracy has improved significantly since the
             previous layer's addition (or since the beginning of the training
             if no new layers have been added yet).
-            If so, adds a new layer (with the specified growth rate), and then
-            either go to the ascension stage (if there is only one layer in the
-            block) or start the improvement stage over (all other cases).
-            Else end the algorithm.
+            If so, two scenarios may happen:
+            - If there is only one layer in the block: add a new layer with as
+              many filters as the previous layer and go to the ascension stage.
+            - Otherwise: add a new layer with the specified growth rate and
+              start the improvement stage over.
+            If the accuracy hasn't improved significantly, end the algorithm.
           - Ascension: add one layer every asc_thresh training epochs; break
             the loop after std_window epochs or more if accuracy hasn't changed
             much; then go to the improvement stage.
@@ -1269,7 +1271,7 @@ class DensEMANNCallback(Callback):
               (optionally after resetting the learning rate to its initial
               value and reducing it according to rlr0), wait until reaching
               pre-pruning accuracy; then if there are any new useless filters
-              wait for all filters to settle and return to pruning, else end
+              and all filters have settled, return to pruning, else end
               the stage.
 
         Args:
@@ -1418,7 +1420,7 @@ class DensEMANNCallback(Callback):
                         self.reduce_lr_callback.gamma))
                 if can_end and accuracy >= self.accuracy_pre_pruning:
                     # prune again if there are useless filters, else continue
-                    # but first, wait for all filters to settle
+                    # AND all filters have settled, else continue
                     if len(useless_filters_list) >= 1 and (
                             len(settled_filters_list) == len(self.kCS_FIFO)):
                         self.set_algorithm_stage(micro_stage=2)
@@ -1482,7 +1484,7 @@ class DensEMANNCallback(Callback):
                     if self.learn.model.block_config[-1] == 2:
                         self.set_algorithm_stage(algorithm_stage=0)
                         self.asc_ref_epoch = epoch
-                        self.set_expected_end(epoch + self.patience_param + 1)
+                        self.set_expected_end(epoch + self.std_window + 1)
                         # Also clear the accuracy_FIFO deque,
                         # as it plays an important role in the ascension stage.
                         self.accuracy_FIFO.clear()
@@ -1510,6 +1512,273 @@ class DensEMANNCallback(Callback):
                         # also make sure to use the pre-layer addition accuracy
                         accuracy = self.accuracy_last_layer
                     self.set_algorithm_stage(algorithm_stage=2)
+
+        # stage #2 = end (stop the algorithm and reset everything)
+        if self.algorithm_stage == 2:
+            continue_training = False
+            self.algorithm_stage = 0
+            self.patience_cntdwn = self.patience_param
+            self.accuracy_last_layer = 0
+
+        return continue_training
+
+    def self_constructing_var_1_3(self, epoch, accuracy):
+        """
+        A step of DensEMANN v1.3 for one training epoch.
+        Builds new layers in the last block depending on parameters.
+        Returns True if training should continue, False otherwise.
+
+        This algorithm consists of an macro-algorithm, which adds layers to the
+        last block, and a micro-algorithm, which builds those layers filter by
+        filter.
+        - The macro-algorithm consists of a succession of two stages:
+          - Improvement: call the micro-algorithm to build the last layer in
+            the block (i.e. to modify it by adding/pruning filters in it);
+            then go to the ascension stage.
+          - Ascension: add the last layer in the block with with as many
+            filters as the previous layer. Then train the network during
+            m_patience_param epochs and check if the accuracy has changed
+            significantly. If so, start the ascension stage over,
+            otherwise end the algorithm.
+        - The micro-algorithm consists of a succession of three stages:
+            - Improvement: countdown of m_patience_param epochs; if a new
+              (settled) filter becomes useful (CS above usefulness_thresh,
+              automatically set), add a filter and restart the countdown;
+              if the countdown ends, wait until all filters have settled and
+              end the stage.
+            - Pruning: save the current accuracy and prune all useless filters
+              (CS below uselessness_thresh, automatically set).
+            - Recovery: if/when the learning reate is at its minimal value
+              (optionally after resetting the learning rate to its initial
+              value and reducing it according to rlr0), wait until reaching
+              pre-pruning accuracy; then if there are any new useless filters
+              and all filters have settled, return to pruning, else end
+              the stage.
+
+        Args:
+            epoch (int) - current training epoch (since adding the last block);
+            accuracy (float) -  accuracy for this epoch.
+
+        Returns:
+            continue_training (bool) - whether or not the algorithm should end
+                after this step.
+        """
+        continue_training = True
+
+        # stage #0 = ascension stage
+        if self.algorithm_stage == 0:
+            if epoch == self.asc_ref_epoch:
+                print("(Skipping to improvement stage.)")
+                self.set_algorithm_stage(algorithm_stage=1, micro_stage=1)
+                if self.should_change_lr:
+                    self.reduce_lr_callback.activation_switch(reset_lr=True)
+                self.set_expected_end(epoch + 2*(self.m_patience_param+1))
+            else:
+                # end stage at the end of the patience countdown.
+                if self.m_patience_cntdwn <= 0:
+                    # reset m_patience_cntdwn
+                    self.m_patience_cntdwn = self.m_patience_param
+                    # check if the accuracy has changed since the last layer
+                    # if so, add a layer (with the current layer's number of
+                    # filters), else go to the final stage
+                    if abs(accuracy-self.accuracy_last_layer
+                           ) >= self.impr_thresh:
+                        self.accuracy_last_layer = accuracy
+                        self.add_new_layers(
+                            growth_rate=len(self.kCS_FIFO),
+                            preserve_transition=self.preserve_transition)
+                        # launch the training loop again.
+                        self.set_expected_end(
+                            epoch + self.m_patience_param + 1)
+                        if self.should_change_lr:
+                            self.reduce_lr_callback.activation_switch(
+                                reset_lr=True)
+                    else:
+                        # undo the previous layer addition
+                        # if specified by user, and if saving the model
+                        if self.remove_last_layer and self.should_save_model:
+                            print("Restoring model state before previous "
+                                  "layer addition.")
+                            self.remove_layers(
+                                preserve_transition=self.preserve_transition)
+                            print("Loading back pre-layer addition weights.")
+                            self.learn.load(
+                                f'{self.save_model_callback.fname}_last_layer',
+                                with_opt=self.save_model_callback.with_opt)
+                            self.save_model_callback._save(
+                                f'{self.save_model_callback.fname}')
+                            # also make sure to use the pre-layer addition acc
+                            accuracy = self.accuracy_last_layer
+                        self.set_algorithm_stage(algorithm_stage=2)
+                else:
+                    # patience countdown progress
+                    self.m_patience_cntdwn -= 1
+
+        # stage #1 = improvement stage
+        if self.algorithm_stage == 1:
+            # This is the only stage that self-constructs at filter level,
+            # so the below functionalities are only needed here
+            settled_filters_list = []
+            useful_filters_count = 0
+            useless_filters_list = []
+            kCS_settled = []
+            # Update the filter kCS lists, count settled and useful filters
+            kCS_list = self.learn.model.get_kCS_list_from_layer(-1, -1)
+            # The actual kCS list for counting settled, useful and useless
+            # filters is only updated if the associated countdown has not ended
+            if self.kCS_list_ref_cntdwn > 0:
+                self.kCS_list_ref = kCS_list
+            for k in range(len(self.kCS_FIFO)):
+                self.kCS_FIFO[k].append(self.kCS_list_ref[k])
+                if len(self.kCS_FIFO[k]) == self.dkCS_smoothing:
+                    self.dkCS_FIFO[k].append(
+                        (self.kCS_FIFO[k][-1] - self.kCS_FIFO[k][0])/(
+                            self.dkCS_smoothing-1))
+                    # Settled = dkCS remained close to 0 during the last epochs
+                    if ((len(self.dkCS_FIFO[k]) == self.dkCS_std_window) and (
+                            np.abs(np.mean(self.dkCS_FIFO[k])
+                                   ) <= self.dkCS_stl_thresh) and
+                            (np.abs(np.std(self.dkCS_FIFO[k])
+                                    ) <= self.dkCS_stl_thresh)):
+                        settled_filters_list.append(k)
+                        if self.micro_stage == 1:
+                            kCS_settled.append(self.kCS_FIFO[k][-1])
+
+            # If half of the original filters have settled
+            if len(settled_filters_list) >= 0.5*self.init_num_filters:
+                # During impr. stage, calculate UFT and ULT
+                if self.micro_stage == 1:
+                    self.usefulness_thresh = min(kCS_settled) + (
+                        max(kCS_settled) - min(kCS_settled)
+                        )*self.auto_usefulness_thresh
+                    self.uselessness_thresh = min(kCS_settled) + (
+                        max(kCS_settled) - min(kCS_settled)
+                        )*self.auto_uselessness_thresh
+                # Detect and count useful and useless filters
+                for k in settled_filters_list:
+                    # Useful = settled, and kCS above the usefulness thresh
+                    if np.mean(self.kCS_FIFO[k]) >= self.usefulness_thresh:
+                        useful_filters_count += 1
+                    # Useless = settled, and kCS below the uselessness thresh
+                    if np.mean(self.kCS_FIFO[k]) <= self.uselessness_thresh:
+                        useless_filters_list.append(k)
+
+            # micro-stage #1 = micro-improvement stage
+            if self.micro_stage == 1:
+                if self.m_patience_cntdwn <= 0 and (
+                        len(settled_filters_list) == len(self.kCS_FIFO)):
+                    # at the end of the patience countdown, end stage when all
+                    # the filters have settled
+                    self.set_algorithm_stage(micro_stage=2)
+                elif useful_filters_count > self.useful_filters_ceil:
+                    # if a new filter is useful, add a filter and restart ctdwn
+                    self.useful_filters_ceil = useful_filters_count
+                    self.add_new_filters(
+                        num_new_filters=self.expansion_rate,
+                        complementarity=self.complementarity,
+                        preserve_transition=self.preserve_transition)
+                    self.m_patience_cntdwn = self.m_patience_param
+                    if self.should_change_lr:
+                        self.reduce_lr_callback.activation_switch()
+                    self.set_expected_end(epoch + 2*(self.m_patience_param+1))
+                else:
+                    # patience countdown progress
+                    self.m_patience_cntdwn -= 1
+
+            # micro-stage #2 = micro-pruning stage
+            if self.micro_stage == 2:
+                # if no filters must be pruned, or if less than
+                # dont_prune_beyond filters would remain after the pruning
+                # operation, skip directly to the final stage
+                if len(useless_filters_list) == 0 or (
+                        len(useless_filters_list) >
+                        len(self.kCS_FIFO) - self.dont_prune_beyond):
+                    if self.should_change_lr:
+                        self.reduce_lr_callback.deactivation_switch()
+                    if self.should_save_model:
+                        self.save_model_callback._save(
+                            f'{self.save_model_callback.fname}')
+                    self.set_algorithm_stage(micro_stage=4)
+                # else, save the accuracy, prune useless filters and end stage
+                else:
+                    self.accuracy_pre_pruning = accuracy
+                    self.remove_filters(
+                        filter_ids=useless_filters_list,
+                        preserve_transition=self.preserve_transition)
+                    self.set_algorithm_stage(micro_stage=3)
+                    if self.should_change_lr:
+                        self.reduce_lr_callback.activation_switch(
+                            reset_lr=True)
+                    # activate the countdown to keep the kCS list as reference
+                    self.kCS_list_ref_cntdwn = (
+                        self.m_patience_param - self.m_patience_cntdwn)
+                    self.set_expected_end(epoch + self.m_patience_param + 1)
+
+            # micro-stage #3 = micro-recovery stage (accessed in next epoch)
+            elif self.micro_stage == 3:
+                # wait until reaching pre-pruning accuracy, then end the stage
+                can_end = not self.should_change_lr or (
+                    self.reduce_lr_callback.current_lr == (
+                        self.reduce_lr_callback.initial_lr *
+                        self.reduce_lr_callback.gamma *
+                        self.reduce_lr_callback.gamma))
+                if can_end and accuracy >= self.accuracy_pre_pruning:
+                    # prune again if there are useless filters, else continue
+                    # AND all filters have settled, else continue
+                    if len(useless_filters_list) >= 1 and (
+                            len(settled_filters_list) == len(self.kCS_FIFO)):
+                        self.set_algorithm_stage(micro_stage=2)
+                    else:
+                        if self.should_change_lr:
+                            self.reduce_lr_callback.deactivation_switch()
+                        if self.should_save_model:
+                            self.save_model_callback._save(
+                                f'{self.save_model_callback.fname}')
+                        self.set_algorithm_stage(micro_stage=4)
+                # if the stage lasts too much time, end it
+                elif self.m_re_patience_cntdwn <= 0:
+                    if self.should_change_lr:
+                        self.reduce_lr_callback.deactivation_switch()
+                    # undo the previous pruning-recovery if saving the model
+                    if self.should_save_model:
+                        print("Restoring model state before previous pruning.")
+                        self.add_new_filters(
+                            num_new_filters=self.num_pruned_filters,
+                            complementarity=False,
+                            preserve_transition=self.preserve_transition)
+                        print("Loading back pre-pruning weights.")
+                        self.learn.load(
+                            f'{self.save_model_callback.fname}_prepruning',
+                            with_opt=self.save_model_callback.with_opt)
+                        self.save_model_callback._save(
+                            f'{self.save_model_callback.fname}')
+                        # also make sure to use the prepruning accuracy
+                        accuracy = self.accuracy_pre_pruning
+                    self.set_algorithm_stage(micro_stage=4)
+                # kCS ref and patience countdown progress
+                # (at the end the kCS values remain fixed)
+                self.kCS_list_ref_cntdwn -= 1
+                self.m_re_patience_cntdwn -= 1
+
+            # at the end of the micro-algorithm, add a new layer
+            if self.micro_stage == 4:
+                # reset everything for the micro-algorithm
+                self.micro_stage = 0
+                self.useful_filters_ceil = 0
+                self.m_patience_cntdwn = self.m_patience_param
+                self.m_re_patience_cntdwn = self.m_re_patience_param
+                self.kCS_list_ref_cntdwn = self.m_patience_param
+                self.accuracy_pre_pruning = 0
+                # add a layer with the current layer's number of filters
+                self.accuracy_last_layer = accuracy
+                self.add_new_layers(
+                    growth_rate=len(self.kCS_FIFO),
+                    preserve_transition=self.preserve_transition)
+                # go to the ascension stage
+                self.set_algorithm_stage(algorithm_stage=0)
+                self.set_expected_end(epoch + self.m_patience_param + 1)
+                if self.should_change_lr:
+                    self.reduce_lr_callback.activation_switch(reset_lr=True)
 
         # stage #2 = end (stop the algorithm and reset everything)
         if self.algorithm_stage == 2:
@@ -1593,6 +1862,47 @@ class DensEMANNCallback(Callback):
 
         return continue_training
 
+    def no_self_constructing(self, epoch, accuracy):
+        """
+        A step of a training routine outside DensEMANN, for one training epoch.
+        May be used, for instance, to train new dense blocks whose architecture
+        is a copy of a DensEMANN-generated dense block.
+        Returns True if training should continue, False otherwise.
+
+        Args:
+            epoch (int) - current training epoch (since adding the last block);
+            accuracy (float) -  accuracy for this epoch.
+
+        Returns:
+            continue_training (bool) - whether or not training should end
+                after this step.
+        """
+        continue_training = True
+
+        if self.algorithm_stage == 0:
+            print("(No ascension stage. Just training without growing.)")
+            self.set_algorithm_stage(algorithm_stage=1)
+            if self.should_change_lr:
+                # We also modify the schedule length, as it may be too small.
+                self.reduce_lr_callback.schedule_length = self.patience_param
+                self.reduce_lr_callback.activation_switch(reset_lr=True)
+            self.set_expected_end(epoch + self.patience_param + 1)
+
+        # stage #2 = improvement (just train)
+        if self.algorithm_stage == 1:
+            if self.patience_cntdwn <= 0:
+                self.set_algorithm_stage(algorithm_stage=2)
+            else:
+                self.patience_cntdwn -= 1
+
+        # stage #2 = end (stop the algorithm and reset everything)
+        if self.algorithm_stage == 2:
+            continue_training = False
+            self.algorithm_stage = 0
+            self.patience_cntdwn = self.patience_param
+
+        return continue_training
+
     def after_epoch(self):
         """
         After each training epoch, perform a step of the DensEMANN algorithm.
@@ -1609,13 +1919,67 @@ class DensEMANNCallback(Callback):
             continue_training = self.self_constructing_step(epoch, accuracy)
             # Stop DensEMANN when specified by the algorithm.
             if not continue_training:
-                # If the block_count hasn't yet been reached, add a new block
-                # and resume DensEMANN. Else end the training process.
+                # If the block_count hasn't yet been reached, add a new block.
+                # Else end the training process.
                 if len(self.learn.model.block_config) < self.block_count:
-                    self.add_new_block()
+                    if self.new_block_mode == "from_scratch":
+                        # Run DensEMANN again to build the new block.
+                        self.add_new_block()
+                    elif self.new_block_mode == "brutal_copy":
+                        # Freeze the weights in the first block.
+                        # self.learn.model.features.denseblock1 \
+                        #     .requires_grad_(False)
+                        # Add all new blocks together and then just train,
+                        # each block is a copy of the first block.
+                        for b in range(self.block_count - len(
+                                self.learn.model.block_config)):
+                            self.add_new_block(
+                                growth_rate=self.learn.model.features
+                                .denseblock1.layer_config[0])
+                            for k in self.learn.model.features.denseblock1 \
+                                    .layer_config[1:]:
+                                self.add_new_layers(
+                                    growth_rate=k, preserve_transition=self
+                                    .preserve_transition)
+                        self.self_constructing_step = self.no_self_constructing
+                    elif self.new_block_mode == "incremental_copy":
+                        # Freeze the weights in the last block.
+                        # exec("self.learn.model.features.denseblock{}."
+                        #      ".requires_grad_(False)".format(
+                        #         len(self.learn.model.block_config)))
+                        # Add new blocks incrementally while training,
+                        # each block is a copy of the first block.
+                        self.add_new_block(
+                            growth_rate=self.learn.model.features
+                            .denseblock1.layer_config[0])
+                        for k in self.learn.model.features.denseblock1 \
+                                .layer_config[1:]:
+                            self.add_new_layers(
+                                growth_rate=k, preserve_transition=self
+                                .preserve_transition)
+                        self.self_constructing_step = self.no_self_constructing
+                    elif self.new_block_mode == "reset_copy":
+                        # Add all new blocks, reinitialize weights and train,
+                        # each block is a copy of the first block.
+                        for b in range(self.block_count - len(
+                                self.learn.model.block_config)):
+                            self.add_new_block(
+                                growth_rate=self.learn.model.features
+                                .denseblock1.layer_config[0])
+                            for k in self.learn.model.features.denseblock1 \
+                                    .layer_config[1:]:
+                                self.add_new_layers(
+                                    growth_rate=k, preserve_transition=self
+                                    .preserve_transition)
+                        self.learn.model.initialise_weights()
+                        self.self_constructing_step = self.no_self_constructing
                     self.initialise_algorithm_variables(asc_ref_epoch=epoch)
                 else:
                     self.active = False
+                    # Unfreeze all weights if frozen.
+                    # if self.new_block_mode in [
+                    #         "incremental_copy", "brutal_copy"]:
+                    #     self.learn.model.features.requires_grad_(True)
                     raise CancelFitException()
 
 

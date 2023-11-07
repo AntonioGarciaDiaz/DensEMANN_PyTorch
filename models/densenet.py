@@ -789,22 +789,7 @@ class DenseNet(nn.Module):
         self.classifier = nn.Linear(self.num_features, self.num_classes)
 
         # Initialisation.
-        # print("\nParameter name list:\n")
-        for name, param in self.named_parameters():
-            # print(name)
-            if 'conv' in name and 'weight' in name:
-                if DensEMANN_init and not (bc_mode and 'conv1' in name):
-                    variance_scaling_initializer_(param.data, mode='fan_none')
-                else:
-                    variance_scaling_initializer_(param.data, mode='fan_in')
-            elif 'norm' in name and 'weight' in name:
-                param.data.fill_(1)
-            elif 'norm' in name and 'bias' in name:
-                param.data.fill_(0)
-            elif 'classifier' in name and 'weight' in name:
-                param.data.fill_(1)
-            elif 'classifier' in name and 'bias' in name:
-                param.data.fill_(0)
+        self.initialise_weights(DensEMANN_init=DensEMANN_init)
 
     def forward(self, x):
         """
@@ -825,6 +810,32 @@ class DenseNet(nn.Module):
         out = torch.flatten(out, 1)
         out = self.classifier(out)
         return out
+
+    def initialise_weights(self, DensEMANN_init=False):
+        """
+        (Re)initialize the DenseNet's weights.
+
+        Args:
+            DensEMANN_init (bool) - use DensEMANN's special version of the
+                variance_scaling_initializer_ for editable convolution layers
+                (default False).
+        """
+        # print("\nParameter name list:\n")
+        for name, param in self.named_parameters():
+            # print(name)
+            if 'conv' in name and 'weight' in name:
+                if DensEMANN_init and not (self.bc_mode and 'conv1' in name):
+                    variance_scaling_initializer_(param.data, mode='fan_none')
+                else:
+                    variance_scaling_initializer_(param.data, mode='fan_in')
+            elif 'norm' in name and 'weight' in name:
+                param.data.fill_(1)
+            elif 'norm' in name and 'bias' in name:
+                param.data.fill_(0)
+            elif 'classifier' in name and 'weight' in name:
+                param.data.fill_(1)
+            elif 'classifier' in name and 'bias' in name:
+                param.data.fill_(0)
 
     def get_kCS_list_from_layer(self, b, l):
         """
@@ -1053,6 +1064,8 @@ class DenseNet(nn.Module):
             num_layers=num_layers,
             num_input_features=self.num_features,
             growth_rate=growth_rate,
+            layer_config=None,
+            update_growth_rate=self.update_growth_rate,
             bc_mode=self.bc_mode,
             bn_size=self.bn_size,
             drop_rate=self.drop_rate,

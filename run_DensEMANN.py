@@ -145,9 +145,23 @@ if __name__ == '__main__':
     parser.add_argument(
         '--dataset', '-ds', dest='dataset', type=str,
         choices=['C10', 'C10+', 'C100', 'C100+', 'SVHN',
+                 'ImageNet', 'ImageNet+',
                  'FMNIST', 'FMNIST+', 'FER2013', 'FER2013+'], default='C10+',
         help='Dataset name, if followed by a \'+\' data augmentation is added'
              ' (default \'C10+\', i.e. CIFAR-10 with data augmentation)')
+    parser.add_argument(
+        '--resize', dest='resize', type=int, default=None,
+        help='Resize the images in the dataset to a user-specified value'
+             ' (default None, i.e. do not resize the images).')
+    parser.add_argument(
+        '--cutout', dest='cutout', action='store_true',
+        help='Use CutOut data augmentation from DeVries and Taylor 2017'
+             ' (independent from standard \'+\' data augmentation).')
+    parser.add_argument(
+        '--no-cutout', dest='cutout', action='store_false',
+        help='Do not use CutOut data augmentation.')
+    parser.set_defaults(cutout=False)
+    parser.set_defaults(reuse_files=False)
     parser.add_argument(
         '--reduction', '-red', '-theta', dest='reduction',
         type=float, default=0.5,
@@ -300,9 +314,23 @@ if __name__ == '__main__':
         help='Minimum number of dense blocks in the network for ending the'
              ' self-construction process. If, at the end of DensEMANN, the'
              ' number of blocks in the network is lower than block_count,'
-             ' a new block is created (with one layer and the DenseNet\'s'
-             ' current growth rate), and DensEMANN is executed again on it.'
-             ' (default=1).')
+             ' new blocks are created through the method specified by'
+             ' --new_block_mode (default=1).')
+    parser.add_argument(
+        '--new_block_mode', '--nblock_mode', '--nbm',
+        dest='new_block_mode', type=str,
+        choices=['from_scratch', 'brutal_copy',
+                 'incremental_copy', 'reset_copy'], default='brutal_copy',
+        help='Mode for adding new blocks. The choice is between'
+             ' \'from_scratch\' (use DensEMANN to build each new block),'
+             ' \'brutal_copy\' (default, add all the new blocks at once as'
+             ' copies of the first one, and then train for --patience_param'
+             ' epochs), \'incremental_copy\' (add the new blocks one by'
+             ' one as copies of the first one, training for --patience_param'
+             ' epochs after each block addition), and'
+             ' \'reset_copy\' (add all the new blocks as copies of the'
+             ' first one, reinitialize the network\'s weight values, and'
+             ' then train for --patience_param epochs).')
     parser.add_argument(
         '--layer_connection_strength', '--layer_cs', '-lcs', dest='layer_cs',
         type=str, choices=['relevance', 'spread'], default='relevance',
@@ -319,7 +347,7 @@ if __name__ == '__main__':
              ' adding a new layer during the ascension stage. (default=10).')
     parser.add_argument(
         '--patience_parameter', '--patience_param', '-pp',
-        dest='patience_param', type=int, default=200,
+        dest='patience_param', type=int, default=300,
         help='Patience parameter, used for self-constructing at layer level'
              ' in DensEMANN variants 0 to 3. Number of epochs to wait before'
              ' stopping the improvement stage, unless a new layer settles.'
@@ -669,12 +697,15 @@ if __name__ == '__main__':
 
     # Other.
     parser.add_argument(
-        '--DensEMANN-init', dest='DensEMANN_init', action='store_true',
-        help='Use the DensEMANN initialization method for prebuilt DenseNets.')
+        '--DensEMANN-weight-init', '--DensEMANN-init',
+        dest='DensEMANN_init', action='store_true',
+        help='Use DensEMANN\'s weight initialisation method for'
+             ' prebuilt DenseNets.')
     parser.add_argument(
-        '--standard-init', dest='DensEMANN_init', action='store_false',
-        help='Do not use the DensEMANN initialization method for prebuilt'
-             ' DenseNets (default option).')
+        '--standard-weight-init', '--standard-init',
+        dest='DensEMANN_init', action='store_false',
+        help='Do not use DensEMANN\'s weight initialisation method for'
+             ' prebuilt DenseNets (default option).')
     parser.set_defaults(DensEMANN_init=False)
 
     # LOGS AND SAVES RELATED PARAMETERS ---------------------------------------
@@ -791,6 +822,8 @@ if __name__ == '__main__':
     if args.valid_size is None:
         if args.dataset in ['SVHN', 'SVHN+']:
             args.valid_size = 6000
+        elif args.dataset in ['ImageNet', 'ImageNet+']:
+            args.valid_size = 128117
         elif args.dataset in ['FMNIST', 'FMNIST+']:
             args.valid_size = 6000
         elif args.dataset in ['FER2013', 'FER2013+']:
@@ -800,6 +833,8 @@ if __name__ == '__main__':
     if not args.train_size:
         if args.dataset in ['SVHN', 'SVHN+']:
             args.train_size = 6000
+        elif args.dataset in ['ImageNet', 'ImageNet+']:
+            args.train_size = 1153050
         elif args.dataset in ['FMNIST', 'FMNIST+']:
             args.train_size = 54000 if args.valid_size else 60000
         elif args.dataset in ['FER2013', 'FER2013+']:

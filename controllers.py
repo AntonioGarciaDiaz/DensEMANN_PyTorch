@@ -25,6 +25,7 @@ from datasets import *
 from modded_callbacks import *
 from models import DenseNet
 from schedules import sched_dsd, sched_dsd_original
+from cutout import Cutout
 
 
 class DensEMANN_controller(object):
@@ -75,6 +76,9 @@ class DensEMANN_controller(object):
             default 'DenseNet-BC').
         dataset (str) - dataset name, if followed by a '+' data augmentation
             is added (default 'C10+', i.e. CIFAR-10 with data augmentation).
+        resize (int or None) - optional size to resize the dataset's images.
+            N.B.: If 32 or lower, small_inputs applies.
+        cutout (float) - whether or not to apply CutOut data augmentation.
         reduction (float) - reduction (theta) at transition layers for
                 DenseNets with compression (DenseNet-BC) (default 0.5).
 
@@ -117,6 +121,9 @@ class DensEMANN_controller(object):
 
         block_count (int) - minimum number of blocks in the network for the
             self-construction process to end (default 1).
+        new_block_mode (str) - specifies how to add new blocks to the network:
+            'from_scratch', 'brutal_copy', 'incremental_copy' or 'reset_copy'
+            (default 'from_scratch').
         layer_cs (str) - 'layer CS', preferred interpretation of CS values
             when evaluating layers (using 'relevance' or 'spread')
             (default relevance).
@@ -277,8 +284,9 @@ class DensEMANN_controller(object):
             contains a micro-algorithm (i.e. self-constructs at filter level).
 
         self_constr_kwargs (dict) - a keyword argument dictionary containing
-            block_count, layer_cs, asc_thresh, patience_param, std_tolerance,
-            std_window, impr_thresh, preserve_transition, remove_last_layer,
+            block_count, new_block_mode, layer_cs, asc_thresh, patience_param,
+            std_tolerance, std_window, impr_thresh, preserve_transition,
+            remove_last_layer,
             and optionally also expansion_rate, dkCS_smoothing,
             dkCS_std_window, dkCS_stl_thresh, auto_usefulness_thresh,
             auto_uselessness_thresh, m_asc_thresh, m_patience_param,
@@ -330,7 +338,8 @@ class DensEMANN_controller(object):
                  reuse_files=False, data=None, load=None, save=None,
                  growth_rate=12, layer_num_list='1', filter_num_list=None,
                  update_growth_rate=True, keep_prob=1.0,
-                 model_type='DenseNet-BC', dataset='C10+', reduction=0.5,
+                 model_type='DenseNet-BC', dataset='C10+', resize=None,
+                 cutout=False, reduction=0.5,
                  efficient=False, train_size=45000, valid_size=5000,
                  n_epochs=300, lim_n_epochs=99999999,
                  batch_size=64, lr=0.1, gamma=0.1, rlr_1=0.5, rlr_2=0.75,
@@ -338,10 +347,10 @@ class DensEMANN_controller(object):
                  should_self_construct=True, should_sparsify=True,
                  should_change_lr=True,
                  self_constructing_var=-1, self_constr_rlr=0,
-                 block_count=1, layer_cs='relevance', asc_thresh=10,
-                 patience_param=200, std_tolerance=0.1, std_window=50,
-                 impr_thresh=0.01, preserve_transition=True,
-                 remove_last_layer=True,
+                 block_count=1, new_block_mode='from_scratch',
+                 layer_cs='relevance', asc_thresh=10, patience_param=200,
+                 std_tolerance=0.1, std_window=50, impr_thresh=0.01,
+                 preserve_transition=True, remove_last_layer=True,
                  expansion_rate=1, dkCS_smoothing=10, dkCS_std_window=30,
                  dkCS_stl_thresh=0.001, auto_usefulness_thresh=0.8,
                  auto_uselessness_thresh=0.2, m_asc_thresh=5,
@@ -368,7 +377,7 @@ class DensEMANN_controller(object):
             Exception: DensEMANN variant 'self_constructing_var' not yet
                 implemented. Implemented DensEMANN variants: [4, 5, 6, 7].
             Exception: dataset 'DATASET' not yet supported.
-                Supported datasets: [C10, C100, SVHN, FMNIST, FER2013].
+                Supported datasets: [supported_datasets].
             Exception: 'load' is not a dir.
             Exception: 'save' is not a dir.
             Exception: source hyperparameters for 'source_experiment_id' not
@@ -405,6 +414,7 @@ class DensEMANN_controller(object):
         supported_datasets = {'C10': [3, 10, True, 32],
                               'C100': [3, 100, True, 32],
                               'SVHN': [3, 10, True, 32],
+                              'ImageNet': [3, 1000, False, 224],
                               'FMNIST': [1, 10, True, 28],
                               'FER2013': [1, 7, True, 48]}
         # Check if the dataset is supported.
@@ -480,7 +490,8 @@ class DensEMANN_controller(object):
             self_constructing_var < 0 or self_constructing_var >= 4)
         if self.should_self_construct:
             self.self_constr_kwargs = {
-                "block_count": block_count, "layer_cs": layer_cs,
+                "block_count": block_count, "new_block_mode": new_block_mode,
+                "layer_cs": layer_cs,
                 "asc_thresh": asc_thresh, "patience_param": patience_param,
                 "std_tolerance": std_tolerance, "std_window": std_window,
                 "impr_thresh": impr_thresh,
@@ -619,6 +630,9 @@ class DensEMANN_controller(object):
         self.num_classes = supported_datasets[dataset_name][1]
         self.small_inputs = supported_datasets[dataset_name][2]
         self.random_crop = supported_datasets[dataset_name][3]
+        if resize:
+            self.small_inputs = resize <= 32
+            self.random_crop = resize
 
         # Get the right normalize transform for each dataset.
         if dataset_name in ["C10", "C100"]:
@@ -632,6 +646,30 @@ class DensEMANN_controller(object):
         else:
             # Imagenet stats should be good for most problems and datasets.
             normalize_tfm = transforms.Normalize(*imagenet_stats)
+
+        # Define data transforms for resizing.
+        resize_transforms = None
+        # Imagenet always needs resizing and center crop.
+        if dataset_name == "ImageNet":
+            resize_transforms = transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+            ])
+            # If further resizing is specified.
+            if resize is not None:
+                # If that resize is not already in a dir, apply it.
+                if not os.path.isdir(os.path.join(
+                        self.data,
+                        "ILSVRC/Data/CLS-LOC/resized_{}x".format(resize))):
+                    resize_transforms = transforms.Compose(
+                        resize_transforms.transforms
+                        + [transforms.Resize(resize)])
+                # Else, erase the resize transforms (already in the dir).
+                else:
+                    resize_transforms = None
+        # Otherwise apply resizing if specified.
+        elif resize is not None:
+            resize_transforms = transforms.Compose([transforms.Resize(resize)])
 
         # Define data transforms for training and testing.
         test_transforms = transforms.Compose([
@@ -649,6 +687,20 @@ class DensEMANN_controller(object):
                 transforms.ToTensor(),
                 normalize_tfm,
             ])
+        # Optionally add a CutOut data augmentation transform.
+        if cutout:
+            train_transforms = transforms.Compose(
+                train_transforms.transforms + [Cutout(n_holes=1, length=16)])
+        # Optionally add resize transforms.
+        if resize_transforms:
+            test_transforms = transforms.Compose(
+                resize_transforms.transforms + test_transforms.transforms)
+            train_transforms = transforms.Compose(
+                resize_transforms.transforms + train_transforms.transforms)
+
+        # print(resize_transforms)
+        # print(test_transforms)
+        # print(train_transforms)
 
         # Define training set and testing set (select the right dataset).
         if dataset_name == "C10":
@@ -666,16 +718,24 @@ class DensEMANN_controller(object):
                 self.data, train=False, transform=test_transforms,
                 download=False)
         elif dataset_name == "SVHN":
+            should_download = not os.path.isdir(self.data)
             self.train_set = ConcatDataset([
                 datasets.SVHN(
                     self.data, split='train', transform=train_transforms,
-                    download=not os.path.isdir(self.data)),
+                    download=should_download),
                 datasets.SVHN(
                     self.data, split='extra', transform=train_transforms,
-                    download=False)])
+                    download=should_download)])
             self.test_set = datasets.SVHN(
                 self.data, split='test', transform=test_transforms,
-                download=False)
+                download=should_download)
+        elif dataset_name == "ImageNet":
+            self.train_set = ImageNetKaggle(
+                self.data, 'train', transform=train_transforms,
+                resize=resize)
+            self.test_set = ImageNetKaggle(
+                self.data, 'val', transform=test_transforms,
+                resize=resize)
         elif dataset_name == "FMNIST":
             self.train_set = datasets.FashionMNIST(
                 self.data, train=True, transform=train_transforms,
@@ -887,16 +947,30 @@ class DensEMANN_controller(object):
         if self.should_train:
             # Begin counting total training time.
             train_start_time = [time.perf_counter(), time.process_time()]
+            if torch.cuda.is_available():
+                print("CUDA is available (running on device {}/{})!".format(
+                    torch.cuda.current_device()+1, torch.cuda.device_count()
+                ))
+                train_start_GPU = torch.cuda.Event(enable_timing=True)
+                train_end_GPU = torch.cuda.Event(enable_timing=True)
+                train_start_GPU.record()
             # Training loop.
             learn.fit(self.lim_n_epochs if self.should_self_construct and (
                 self.self_constructing_var >= 2) else self.n_epochs, cbs=cbs)
             # Measure total training time.
             train_time = [time.perf_counter() - train_start_time[0],
-                          time.process_time() - train_start_time[1]]
+                          time.process_time() - train_start_time[1],
+                          0]  # Wall, CPU, and GPU time (if using CUDA, else 0)
+            if torch.cuda.is_available():
+                train_end_GPU.record()
+                torch.cuda.synchronize()
+                train_time[-1] = train_start_GPU.elapsed_time(train_end_GPU)
             print("\nTRAINING COMPLETE!\n")
-            print("TOTAL TRAINING TIME:\n- WALL:\t{}\n- CPU:\t{}\n".format(
+            print("TOTAL TRAINING TIME:\n- WALL:\t{}\n- CPU:\t{}\n{}".format(
                 str(timedelta(seconds=train_time[0])),
-                str(timedelta(seconds=train_time[1]))))
+                str(timedelta(seconds=train_time[1])),
+                "- GPU:\t{}\n".format(str(timedelta(
+                    milliseconds=train_time[-1]))) if train_time[-1] else ""))
             # If DensEMANN was used, print the final architecture.
             if self.should_self_construct:
                 total_par, cv_par, fc_par = self.model.count_trainable_params()
@@ -931,11 +1005,20 @@ class DensEMANN_controller(object):
         if self.should_test:
             # Begin counting testing time.
             test_start_time = [time.perf_counter(), time.process_time()]
+            if torch.cuda.is_available():
+                test_start_GPU = torch.cuda.Event(enable_timing=True)
+                test_end_GPU = torch.cuda.Event(enable_timing=True)
+                test_start_GPU.record()
             # Test on the test set and get results.
             # preds, y, losses = learn.get_preds(dl=test_loader,with_loss=True)
             res = learn.validate(dl=test_loader, ds_idx=2)
             test_time = [time.perf_counter() - test_start_time[0],
-                         time.process_time() - test_start_time[1]]
+                         time.process_time() - test_start_time[1],
+                         0]  # Wall, CPU, and GPU time (if using CUDA, else 0)
+            if torch.cuda.is_available():
+                test_end_GPU.record()
+                torch.cuda.synchronize()
+                test_time[-1] = test_start_GPU.elapsed_time(test_end_GPU)
             # test_loss = np.mean(losses.tolist())
             # test_accuracy = float(accuracy(preds, y))
             test_loss = res[0]
@@ -982,20 +1065,21 @@ class DensEMANN_controller(object):
                     self.ft_comma, str(timedelta(seconds=train_time[0])))
                 write_at_end += 'training CPU time{0}{1}\n'.format(
                     self.ft_comma, str(timedelta(seconds=train_time[1])))
+                if train_time[-1]:
+                    write_at_end += 'training GPU time{0}{1}\n'.format(
+                        self.ft_comma, str(timedelta(
+                            milliseconds=train_time[-1])))
             if self.should_test:
                 write_at_end += 'test wall time{0}{1}\n'.format(
                     self.ft_comma, str(timedelta(seconds=test_time[0])))
                 write_at_end += 'test CPU time{0}{1}\n'.format(
                     self.ft_comma, str(timedelta(seconds=test_time[1])))
-            # If DensEMANN was used, print the final architecture.
-            if self.should_self_construct:
-                write_at_end += (
-                    'total trainable parameters{0}{1}\n' +
-                    'convolutional{0}{2}\nfully connected{0}{3}\n').format(
-                        self.ft_comma, *self.model.count_trainable_params())
-                write_at_end += '\n\"FINAL ARCHITECTURE:\"\n\"{}\"\n'.format(
-                    str(self.model).replace('\n', '\"\n\"'))
-            elif self.should_sparsify:
+                if test_time[-1]:
+                    write_at_end += 'test GPU time{0}{1}\n'.format(
+                        self.ft_comma, str(timedelta(
+                            milliseconds=test_time[-1])))
+            # Count the total, convolutional and F.C. trainable parameters.
+            if self.should_sparsify:
                 write_at_end += (
                     'total trainable parameters{0}{1}\n' +
                     'out of which in use{0}{2}\n' +
@@ -1003,6 +1087,15 @@ class DensEMANN_controller(object):
                     'fully connected (in use){0}{4}\n').format(
                         self.ft_comma, *self.model.count_trainable_params(
                             count_in_use=True))
+            else:
+                write_at_end += (
+                    'total trainable parameters{0}{1}\n' +
+                    'convolutional{0}{2}\nfully connected{0}{3}\n').format(
+                        self.ft_comma, *self.model.count_trainable_params())
+            # If DensEMANN was used, print the final architecture.
+            if self.should_self_construct:
+                write_at_end += '\n\"FINAL ARCHITECTURE:\"\n\"{}\"\n'.format(
+                    str(self.model).replace('\n', '\"\n\"'))
             with open(os.path.join(
                     self.save, self.experiment_id + '_ft_log.csv'),
                     'a') as f:

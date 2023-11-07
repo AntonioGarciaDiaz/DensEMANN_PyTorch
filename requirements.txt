@@ -1,0 +1,9 @@
+-f https://download.pytorch.org/whl/torch_stable.html
+fastai==2.5.3
+fasterai==0.1.2
+matplotlib==3.0.2
+numpy==1.19.5
+pandas==1.1.5
+Pillow==9.4.0
+torch==1.10.1+cu113
+torchvision==0.11.2+cu113

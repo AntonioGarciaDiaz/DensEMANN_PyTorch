@@ -70,7 +70,7 @@ def sched_poly_wave(start, end, pos, power=0.5):
 
 def sched_agp(start, end, pos, power=3, start_pos=0.25, end_pos=1):
     """
-    A generalisation of the Augmented Gradual Pruner (AGP) schedule
+    A generalisation of the Automated Gradual Pruning (AGP) schedule
     (Zhu and Gupta, 2017): https://arxiv.org/abs/1710.01878v2
 
     Args:
